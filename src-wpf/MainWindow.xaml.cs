@@ -2593,11 +2593,11 @@ namespace TarkovAutoShadePlus
                 Owner = this,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Width = 460,
-                Height = 352,
+                Height = 296,
                 MinWidth = 460,
-                MinHeight = 352,
+                MinHeight = 296,
                 MaxWidth = 460,
-                MaxHeight = 352,
+                MaxHeight = 296,
                 ResizeMode = ResizeMode.NoResize,
                 ShowInTaskbar = false,
                 Background = (Brush)FindResource("CrtSurfaceBrush"),
@@ -2610,8 +2610,6 @@ namespace TarkovAutoShadePlus
             };
             content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(40) });
             content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(84) });
-            content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });
-            content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });
             content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });
             content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(32) });
             content.RowDefinitions.Add(new RowDefinition {
@@ -2641,60 +2639,6 @@ namespace TarkovAutoShadePlus
             Grid.SetRow(details, 1);
             content.Children.Add(details);
 
-            var bilibili = new TextBlock
-            {
-                Text = "B站主页：lub大萝卜",
-                FontFamily = (System.Windows.Media.FontFamily)FindResource("FontMono"),
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = (Brush)FindResource("TerminalGreenBrush"),
-                TextDecorations = TextDecorations.Underline,
-                Cursor = Cursors.Hand,
-                HorizontalAlignment = HorizontalAlignment.Left,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            bilibili.MouseLeftButtonUp += delegate
-            {
-                try
-                {
-                    Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "https://space.bilibili.com/66741964",
-                        UseShellExecute = true
-                    });
-                }
-                catch { }
-            };
-            Grid.SetRow(bilibili, 2);
-            content.Children.Add(bilibili);
-
-            var afdian = new TextBlock
-            {
-                Text = "爱发电主页：lub大萝卜",
-                FontFamily = (System.Windows.Media.FontFamily)FindResource("FontMono"),
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = (Brush)FindResource("TerminalGreenBrush"),
-                TextDecorations = TextDecorations.Underline,
-                Cursor = Cursors.Hand,
-                HorizontalAlignment = HorizontalAlignment.Left,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            afdian.MouseLeftButtonUp += delegate
-            {
-                try
-                {
-                    Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "https://afdian.com/a/lublub",
-                        UseShellExecute = true
-                    });
-                }
-                catch { }
-            };
-            Grid.SetRow(afdian, 3);
-            content.Children.Add(afdian);
-
             var github = new TextBlock
             {
                 Text = "GitHub仓库：TarkovAutoShadePlus",
@@ -2719,7 +2663,7 @@ namespace TarkovAutoShadePlus
                 }
                 catch { }
             };
-            Grid.SetRow(github, 4);
+            Grid.SetRow(github, 2);
             content.Children.Add(github);
 
             var notice = new TextBlock
@@ -2731,7 +2675,7 @@ namespace TarkovAutoShadePlus
                 TextWrapping = TextWrapping.Wrap,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            Grid.SetRow(notice, 5);
+            Grid.SetRow(notice, 3);
             content.Children.Add(notice);
 
             var close = new Button
@@ -2745,7 +2689,7 @@ namespace TarkovAutoShadePlus
                 Style = (Style)FindResource("TacticalButton")
             };
             close.Click += delegate { about.Close(); };
-            Grid.SetRow(close, 6);
+            Grid.SetRow(close, 4);
             content.Children.Add(close);
 
             about.Content = content;
