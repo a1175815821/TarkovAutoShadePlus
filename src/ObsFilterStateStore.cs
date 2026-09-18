@@ -3,7 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     // The OBS plugin consumes this small, dependency-free contract instead of
     // reading the WPF settings format or depending on the recorder executable.

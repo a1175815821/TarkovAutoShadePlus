@@ -3,16 +3,17 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     internal sealed class ScreenshotWatcher : IDisposable
     {
         private readonly object sync = new object();
         private readonly Dictionary<string, DateTime> emitted =
             new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
-        private FileSystemWatcher watcher;
+        private readonly List<FileSystemWatcher> watchers = new List<FileSystemWatcher>();
+        private readonly List<string> folders = new List<string>();
         private Timer debounceTimer;
-        private string pendingPath;
+        private readonly List<string> pendingPaths = new List<string>();
         private bool enabled;
 
         public event Action<string> ScreenshotReady;
@@ -26,7 +27,12 @@ namespace TarkovAutoShade
                 {
                     try
                     {
-                        return watcher != null && watcher.EnableRaisingEvents;
+                        foreach (FileSystemWatcher watcher in watchers)
+                        {
+                            if (watcher != null && watcher.EnableRaisingEvents)
+                                return true;
+                        }
+                        return false;
                     }
                     catch
                     {
@@ -42,49 +48,112 @@ namespace TarkovAutoShade
             set
             {
                 enabled = value;
-                if (watcher != null) watcher.EnableRaisingEvents = enabled;
+                lock (sync)
+                {
+                    foreach (FileSystemWatcher watcher in watchers)
+                    {
+                        try { watcher.EnableRaisingEvents = enabled; }
+                        catch { }
+                    }
+                }
             }
         }
 
-        public string Folder { get; private set; }
+        public string Folder
+        {
+            get
+            {
+                lock (sync) { return folders.Count == 0 ? null : folders[0]; }
+            }
+        }
+
+        public IList<string> Folders
+        {
+            get
+            {
+                lock (sync) { return new List<string>(folders); }
+            }
+        }
 
         public void SetFolder(string folder)
+        {
+            var single = new List<string>();
+            if (!string.IsNullOrWhiteSpace(folder)) single.Add(folder);
+            SetFolders(single);
+        }
+
+        public void SetFolders(IList<string> newFolders)
         {
             lock (sync)
             {
                 StopWatcher();
-                Folder = folder;
-                if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
-                    return;
+                folders.Clear();
+                if (newFolders != null)
+                {
+                    foreach (string folder in newFolders)
+                    {
+                        if (string.IsNullOrWhiteSpace(folder)) continue;
+                        bool dup = false;
+                        foreach (string existing in folders)
+                        {
+                            if (string.Equals(existing, folder, StringComparison.OrdinalIgnoreCase))
+                            {
+                                dup = true;
+                                break;
+                            }
+                        }
+                        if (!dup && Directory.Exists(folder)) folders.Add(folder);
+                    }
+                }
 
-                watcher = new FileSystemWatcher(folder, "*.png");
-                watcher.NotifyFilter = NotifyFilters.FileName |
-                    NotifyFilters.LastWrite | NotifyFilters.Size |
-                    NotifyFilters.CreationTime;
-                watcher.Created += OnChanged;
-                watcher.Changed += OnChanged;
-                watcher.Renamed += OnRenamed;
-                watcher.Error += OnError;
-                watcher.EnableRaisingEvents = enabled;
+                foreach (string folder in folders)
+                {
+                    try
+                    {
+                        var watcher = new FileSystemWatcher(folder, "*.png");
+                        watcher.NotifyFilter = NotifyFilters.FileName |
+                            NotifyFilters.LastWrite | NotifyFilters.Size |
+                            NotifyFilters.CreationTime;
+                        watcher.Created += OnChanged;
+                        watcher.Changed += OnChanged;
+                        watcher.Renamed += OnRenamed;
+                        watcher.Error += OnError;
+                        watcher.EnableRaisingEvents = enabled;
+                        watchers.Add(watcher);
+                    }
+                    catch { }
+                }
             }
         }
 
         public string FindLatest()
         {
-            if (string.IsNullOrWhiteSpace(Folder) || !Directory.Exists(Folder))
-                return null;
+            string[] searchFolders;
+            lock (sync) { searchFolders = folders.ToArray(); }
+            if (searchFolders.Length == 0) return null;
 
             string latest = null;
             DateTime latestTime = DateTime.MinValue;
-            foreach (string file in Directory.GetFiles(Folder, "*.png"))
+            foreach (string folder in searchFolders)
             {
-                DateTime time;
-                try { time = File.GetLastWriteTimeUtc(file); }
-                catch { continue; }
-                if (time > latestTime)
+                if (string.IsNullOrWhiteSpace(folder)) continue;
+                string[] files;
+                try
                 {
-                    latest = file;
-                    latestTime = time;
+                    if (!Directory.Exists(folder)) continue;
+                    files = Directory.GetFiles(folder, "*.png");
+                }
+                catch { continue; }
+                foreach (string file in files)
+                {
+                    DateTime time;
+                    try { time = File.GetLastWriteTimeUtc(file); }
+                    catch { continue; }
+                    if (time > latestTime)
+                    {
+                        latest = file;
+                        latestTime = time;
+                    }
                 }
             }
             return latest;
@@ -116,7 +185,16 @@ namespace TarkovAutoShade
 
             lock (sync)
             {
-                pendingPath = filePath;
+                bool exists = false;
+                foreach (string pending in pendingPaths)
+                {
+                    if (string.Equals(pending, filePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) pendingPaths.Add(filePath);
                 if (debounceTimer == null)
                 {
                     debounceTimer = new Timer(delegate {
@@ -132,22 +210,28 @@ namespace TarkovAutoShade
 
         private void EmitPending()
         {
-            string path;
+            string[] paths;
             lock (sync)
             {
-                path = pendingPath;
-                pendingPath = null;
+                if (pendingPaths.Count == 0) return;
+                paths = pendingPaths.ToArray();
+                pendingPaths.Clear();
             }
-            if (string.IsNullOrWhiteSpace(path)) return;
 
+            var readyPaths = new List<string>();
             DateTime now = DateTime.UtcNow;
             lock (sync)
             {
-                DateTime previous;
-                if (emitted.TryGetValue(path, out previous) &&
-                    (now - previous).TotalSeconds < 3.0)
-                    return;
-                emitted[path] = now;
+                foreach (string path in paths)
+                {
+                    if (string.IsNullOrWhiteSpace(path)) continue;
+                    DateTime previous;
+                    if (emitted.TryGetValue(path, out previous) &&
+                        (now - previous).TotalSeconds < 3.0)
+                        continue;
+                    emitted[path] = now;
+                    readyPaths.Add(path);
+                }
 
                 if (emitted.Count > 80)
                 {
@@ -159,21 +243,26 @@ namespace TarkovAutoShade
             }
 
             Action<string> handler = ScreenshotReady;
-            if (handler != null) handler(path);
+            if (handler == null) return;
+            foreach (string path in readyPaths) handler(path);
         }
 
         private void StopWatcher()
         {
-            if (watcher != null)
+            foreach (FileSystemWatcher watcher in watchers)
             {
-                watcher.EnableRaisingEvents = false;
-                watcher.Created -= OnChanged;
-                watcher.Changed -= OnChanged;
-                watcher.Renamed -= OnRenamed;
-                watcher.Error -= OnError;
-                watcher.Dispose();
-                watcher = null;
+                try
+                {
+                    watcher.EnableRaisingEvents = false;
+                    watcher.Created -= OnChanged;
+                    watcher.Changed -= OnChanged;
+                    watcher.Renamed -= OnRenamed;
+                    watcher.Error -= OnError;
+                    watcher.Dispose();
+                }
+                catch { }
             }
+            watchers.Clear();
         }
 
         public void Dispose()

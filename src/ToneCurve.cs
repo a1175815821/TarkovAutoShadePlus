@@ -1,6 +1,6 @@
 using System;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     internal static class ToneCurve
     {

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,7 +15,7 @@ using System.Windows.Input;
 using WinForms = System.Windows.Forms;
 using DrawingBitmap = System.Drawing.Bitmap;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     public partial class MainWindow : Window
     {
@@ -29,6 +30,10 @@ namespace TarkovAutoShade
         private DispatcherTimer previewRefreshTimer;
         private DispatcherTimer notificationTimer;
         private DispatcherTimer processWatchTimer;
+        private DispatcherTimer ddcDebounceTimer;
+        private int pendingBrightness = -1;
+        private int pendingContrast = -1;
+        private string pendingDdcDevice = "";
         private PreviewControl previewControl;
         private GlobalHotkey toggleHotkey;
         private WinForms.NotifyIcon trayIcon;
@@ -47,7 +52,13 @@ namespace TarkovAutoShade
         private bool updatingHardwareControls;
         private bool updatingDisplaySelection;
         private bool updatingDisplayList;
+        private bool updatingFolderSelection;
+        private bool updatingProcessSelection;
         private bool promotingCustomPreset;
+        // 当前生效、同时也是界面正在编辑的那份调参档案。
+        // 平铺字段始终镜像这份档案，所以既有的读写逻辑不用改。
+        private int activeProfileKey = AppSettings.ProfileKeyEft;
+        private bool switchingProfile;
         private bool processWasDetected;
         private bool autoPausedByProcess;
         private bool processWatchUiInitialized;
@@ -59,11 +70,15 @@ namespace TarkovAutoShade
         private WinEventDelegate foregroundWindowEventHandler;
         private IntPtr foregroundWindowEventHook;
         private MonitorCapabilities monitorCapabilities = new MonitorCapabilities();
+        private RealtimeController realtimeController;
+        private bool updatingRealtimeControls;
+        private int realtimeVersion;
 
         public MainWindow()
         {
             settings.Normalize();
             InitializeComponent();
+            gammaController.TransitionFailed += OnGammaTransitionFailed;
             InitializePreviewControl();
             InitializeTrayIcon();
             InitializeHotkey();
@@ -71,6 +86,7 @@ namespace TarkovAutoShade
             BindSliderEvents();
             BindButtonEvents();
             BindPresetEvents();
+            BindProfileEvents();
             BindDisplayEvents();
             BindProcessWatchEvents();
             BindFolderPicker();
@@ -79,6 +95,9 @@ namespace TarkovAutoShade
             ApplySettingsToSliders();
             InitializeProcessWatcher();
             ConfigureScreenshotFolder();
+            BindRealtimeEvents();
+            ApplyRealtimeSettingsToUi();
+            InitializeRealtime();
             RecoverPreviousSession();
             ObsFilterStateStore.WriteDisabled();
 
@@ -111,7 +130,6 @@ namespace TarkovAutoShade
             {
                 string restoreError;
                 gammaController.RestoreActive(out restoreError);
-                RecoveryStore.Clear();
             }
 
             updatingDisplayList = true;
@@ -168,6 +186,11 @@ namespace TarkovAutoShade
                     selectedDevices.Add(selected.DeviceName);
                 settings.SelectedDisplayDevices = selectedDevices;
 
+                var validDevices = new List<string>();
+                foreach (DisplayTarget display in displayTargets)
+                    validDevices.Add(display.DeviceName);
+                gammaController.PruneBaselines(validDevices);
+
                 DisplayModeComboBox.SelectedIndex = settings.MultiDisplayMode ? 1 : 0;
                 BuildDisplaySelectionControls();
                 ApplyDisplayModeUi();
@@ -185,6 +208,7 @@ namespace TarkovAutoShade
             if (showNotification)
                 ShowNotification("显示器列表已更新", NotificationType.Info);
             SaveSettings();
+            if (realtimeController != null) realtimeController.Wake();
         }
 
         private void BuildDisplaySelectionControls()
@@ -304,55 +328,217 @@ namespace TarkovAutoShade
 
         private void ConfigureScreenshotFolder()
         {
-            string configuredFolder = settings.ScreenshotFolder;
-            string folder = Directory.Exists(configuredFolder) ? configuredFolder : null;
-            if (string.IsNullOrWhiteSpace(folder))
+            settings.Normalize();
+            var candidates = new List<string>();
+            if (settings.ScreenshotFolders != null)
             {
-                string discovered = ScreenshotFolderLocator.Find();
-                if (!string.IsNullOrWhiteSpace(discovered))
+                foreach (string folder in settings.ScreenshotFolders)
                 {
-                    folder = discovered;
-                    settings.ScreenshotFolder = discovered;
-                    SettingsStore.Save(settings);
+                    if (!string.IsNullOrWhiteSpace(folder) &&
+                        !candidates.Contains(folder, StringComparer.OrdinalIgnoreCase))
+                        candidates.Add(folder);
                 }
             }
+            if (!string.IsNullOrWhiteSpace(settings.ScreenshotFolder) &&
+                !candidates.Contains(settings.ScreenshotFolder, StringComparer.OrdinalIgnoreCase))
+                candidates.Insert(0, settings.ScreenshotFolder);
 
-            if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
-                folder = null;
-            FolderPath.Text = folder ?? "未找到截图目录";
-            screenshotWatcher.SetFolder(folder);
-            screenshotWatcher.Enabled = settings.AutoWatch;
-            if (folder == null)
-                ShowNotification("未找到截图目录，请点击“选择目录”按钮手动选择。",
+            // 自动补上已安装但尚未记录的原版/竞技场目录，做到双端同时监听。
+            foreach (string discovered in ScreenshotFolderLocator.FindAll())
+            {
+                if (!candidates.Contains(discovered, StringComparer.OrdinalIgnoreCase))
+                    candidates.Add(discovered);
+            }
+            settings.ScreenshotFolders = candidates;
+            if (candidates.Count > 0)
+                settings.ScreenshotFolder = candidates[0];
+            if (!initializing) SettingsStore.Save(settings);
+
+            ApplyScreenshotFoldersToWatcher();
+            BuildFolderSelectionControls();
+            UpdateFolderSummary();
+            if (screenshotWatcher.Folders.Count == 0)
+                ShowNotification("未找到截图目录，请点击“添加目录”按钮手动选择。",
                     NotificationType.Warning);
+        }
+
+        private void ApplyScreenshotFoldersToWatcher()
+        {
+            var existing = new List<string>();
+            if (settings.ScreenshotFolders != null)
+            {
+                foreach (string folder in settings.ScreenshotFolders)
+                {
+                    try
+                    {
+                        if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder) &&
+                            !existing.Contains(folder, StringComparer.OrdinalIgnoreCase))
+                            existing.Add(folder);
+                    }
+                    catch { }
+                }
+            }
+            screenshotWatcher.SetFolders(existing);
+            screenshotWatcher.Enabled = settings.AutoWatch;
+        }
+
+        private void BuildFolderSelectionControls()
+        {
+            if (FolderSelectionPanel == null) return;
+            updatingFolderSelection = true;
+            try
+            {
+                FolderSelectionPanel.Children.Clear();
+                if (settings.ScreenshotFolders == null || settings.ScreenshotFolders.Count == 0)
+                {
+                    var empty = new TextBlock
+                    {
+                        Text = "暂无已记录目录，将自动发现原版/竞技场。",
+                        FontFamily = (System.Windows.Media.FontFamily)FindResource("FontUi"),
+                        FontSize = 10,
+                        Foreground = (System.Windows.Media.Brush)FindResource("PhosphorDimBrush"),
+                        TextWrapping = TextWrapping.Wrap
+                    };
+                    FolderSelectionPanel.Children.Add(empty);
+                    return;
+                }
+                foreach (string folder in settings.ScreenshotFolders)
+                {
+                    string captured = folder;
+                    bool exists;
+                    try { exists = Directory.Exists(captured); }
+                    catch { exists = false; }
+                    var checkBox = new CheckBox
+                    {
+                        Content = AppSettings.GetFriendlyFolderName(captured) + "｜" + captured,
+                        Tag = captured,
+                        IsChecked = exists,
+                        Style = (Style)FindResource("TacticalCheckBox"),
+                        Margin = new Thickness(0, 0, 0, 6),
+                        ToolTip = captured + (exists ? "" : "（目录不存在，仅保留记录）")
+                    };
+                    checkBox.Checked += OnFolderSelectionChanged;
+                    checkBox.Unchecked += OnFolderSelectionChanged;
+                    FolderSelectionPanel.Children.Add(checkBox);
+                }
+            }
+            finally
+            {
+                updatingFolderSelection = false;
+            }
+        }
+
+        private void OnFolderSelectionChanged(object sender, RoutedEventArgs e)
+        {
+            if (initializing || updatingFolderSelection) return;
+            var remaining = new List<string>();
+            if (FolderSelectionPanel != null)
+            {
+                foreach (UIElement element in FolderSelectionPanel.Children)
+                {
+                    var checkBox = element as CheckBox;
+                    string folder = checkBox == null ? null : checkBox.Tag as string;
+                    if (checkBox != null && checkBox.IsChecked == true &&
+                        !string.IsNullOrWhiteSpace(folder)) remaining.Add(folder);
+                }
+            }
+            // 取消勾选即移除记录；全不勾选则停止监听但保留空列表。
+            settings.ScreenshotFolders = remaining;
+            if (remaining.Count > 0) settings.ScreenshotFolder = remaining[0];
+            ApplyScreenshotFoldersToWatcher();
+            UpdateFolderSummary();
+            UpdateWatcherUi();
+            SaveSettings();
+        }
+
+        private void UpdateFolderSummary()
+        {
+            IList<string> watched = screenshotWatcher.Folders;
+            if (watched.Count == 0)
+            {
+                FolderPath.Text = "未找到截图目录";
+                FolderPath.ToolTip = "点击添加截图目录";
+            }
+            else if (watched.Count == 1)
+            {
+                FolderPath.Text = AppSettings.GetFriendlyFolderName(watched[0]) + "｜" + watched[0];
+                FolderPath.ToolTip = watched[0];
+            }
+            else
+            {
+                var names = new List<string>();
+                foreach (string folder in watched)
+                    names.Add(AppSettings.GetFriendlyFolderName(folder));
+                FolderPath.Text = "已监听 " + watched.Count + " 个目录（" + string.Join("＋", names.ToArray()) + "）";
+                FolderPath.ToolTip = string.Join("\n", watched.ToArray());
+            }
         }
 
         private void BindFolderPicker()
         {
             FolderPath.Cursor = Cursors.Hand;
-            FolderPath.ToolTip = "点击选择截图目录";
+            FolderPath.ToolTip = "点击添加截图目录";
             FolderPath.MouseLeftButtonDown += delegate { OpenScreenshotFolderPicker(); };
             BrowseFolderButton.Click += delegate { OpenScreenshotFolderPicker(); };
+            if (ResetFolderButton != null)
+                ResetFolderButton.Click += delegate { ResetScreenshotFolders(); };
         }
 
         private void OpenScreenshotFolderPicker()
         {
             using (var dialog = new WinForms.FolderBrowserDialog())
             {
-                dialog.Description = "选择 Escape from Tarkov 的 Screenshots 文件夹";
-                dialog.SelectedPath = Directory.Exists(settings.ScreenshotFolder) ?
+                dialog.Description = "选择要监听的 Screenshots 文件夹（原版/竞技场可分别添加，可同时监听多个）";
+                string initial = null;
+                if (settings.ScreenshotFolders != null)
+                {
+                    foreach (string folder in settings.ScreenshotFolders)
+                    {
+                        if (Directory.Exists(folder)) { initial = folder; break; }
+                    }
+                }
+                dialog.SelectedPath = initial ?? (Directory.Exists(settings.ScreenshotFolder) ?
                     settings.ScreenshotFolder : Environment.GetFolderPath(
-                        Environment.SpecialFolder.MyDocuments);
+                        Environment.SpecialFolder.MyDocuments));
                 if (dialog.ShowDialog() != WinForms.DialogResult.OK) return;
 
-                settings.ScreenshotFolder = dialog.SelectedPath;
-                FolderPath.Text = dialog.SelectedPath;
-                screenshotWatcher.SetFolder(dialog.SelectedPath);
-                screenshotWatcher.Enabled = settings.AutoWatch;
+                string picked = dialog.SelectedPath;
+                if (settings.ScreenshotFolders == null)
+                    settings.ScreenshotFolders = new List<string>();
+                bool exists = false;
+                foreach (string folder in settings.ScreenshotFolders)
+                {
+                    if (string.Equals(folder, picked, StringComparison.OrdinalIgnoreCase))
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) settings.ScreenshotFolders.Add(picked);
+                settings.ScreenshotFolder = picked;
+                ApplyScreenshotFoldersToWatcher();
+                BuildFolderSelectionControls();
+                UpdateFolderSummary();
                 SettingsStore.Save(settings);
                 UpdateWatcherUi();
-                ShowNotification("截图目录已更新，自动监听已准备就绪。", NotificationType.Success);
+                ShowNotification("截图目录已添加，自动监听已准备就绪。", NotificationType.Success);
             }
+        }
+
+        private void ResetScreenshotFolders()
+        {
+            List<string> discovered = ScreenshotFolderLocator.FindAll();
+            settings.ScreenshotFolders = discovered;
+            if (discovered.Count > 0) settings.ScreenshotFolder = discovered[0];
+            ApplyScreenshotFoldersToWatcher();
+            BuildFolderSelectionControls();
+            UpdateFolderSummary();
+            SaveSettings();
+            UpdateWatcherUi();
+            ShowNotification(discovered.Count == 0 ?
+                "未发现原版/竞技场截图目录，请手动添加。" :
+                "已重新发现 " + discovered.Count + " 个截图目录。", discovered.Count == 0 ?
+                NotificationType.Warning : NotificationType.Success);
         }
 
         private void InitializePreviewControl()
@@ -388,7 +574,7 @@ namespace TarkovAutoShade
             trayIcon = new WinForms.NotifyIcon
             {
                 Icon = icon,
-                Text = "TarkovAutoShade",
+                Text = "TarkovAutoShadePlus",
                 ContextMenuStrip = trayMenu,
                 Visible = true
             };
@@ -398,7 +584,7 @@ namespace TarkovAutoShade
             {
                 if (WindowState != WindowState.Minimized) return;
                 Hide();
-                trayIcon.ShowBalloonTip(1800, "TarkovAutoShade",
+                trayIcon.ShowBalloonTip(1800, "TarkovAutoShadePlus",
                     "已最小化到系统托盘。双击图标恢复窗口。",
                     WinForms.ToolTipIcon.Info);
             };
@@ -658,7 +844,9 @@ namespace TarkovAutoShade
             {
                 int number = (int)Math.Round(e.NewValue);
                 value.Text = signed ? FormatSigned(number) : number.ToString();
-                if (initializing) return;
+                // switchingProfile：切档时是程序在铺值，不是用户在调，
+                // 不能把刚加载的档案又顶成“自定义预设”。
+                if (initializing || switchingProfile) return;
                 if (PresetComboBox.SelectedIndex != 5)
                 {
                     promotingCustomPreset = true;
@@ -709,7 +897,6 @@ namespace TarkovAutoShade
                 bool wasRunning = IsFilterRunning();
                 string error;
                 gammaController.RestoreActive(out error);
-                RecoveryStore.Clear();
                 settings.MultiDisplayMode = nextMulti;
                 if (nextMulti) BuildDisplaySelectionControls();
                 ApplyDisplayModeUi();
@@ -731,7 +918,6 @@ namespace TarkovAutoShade
                 bool wasRunning = IsFilterRunning();
                 string error;
                 gammaController.RestoreActive(out error);
-                RecoveryStore.Clear();
                 displayDevice = selected.DeviceName;
                 settings.DisplayDevice = displayDevice;
                 RefreshMonitorCapabilities();
@@ -766,7 +952,6 @@ namespace TarkovAutoShade
             {
                 string error;
                 gammaController.RestoreActive(out error);
-                RecoveryStore.Clear();
                 if (currentAnalysis != null && currentAnalysis.IsUsable)
                     ApplyRecommendation(currentAnalysis);
             }
@@ -797,6 +982,7 @@ namespace TarkovAutoShade
                 bool detected = IsWatchedProcessActive();
                 processWasDetected = detected;
                 RefreshProcessList();
+                BuildProcessSelectionControls();
                 if (wasRunning && !detected)
                     PauseFilterForProcess();
                 UpdateProcessWatchUi();
@@ -812,9 +998,27 @@ namespace TarkovAutoShade
             };
             ProcessComboBox.SelectionChanged += delegate
             {
+                if (initializing) return;
                 string selected = ProcessComboBox.SelectedItem as string;
                 if (string.IsNullOrWhiteSpace(selected)) return;
-                settings.WatchedProcessName = selected;
+                // 下拉框改为“添加”语义：选中运行中进程即加入同时侦听列表，而非替换。
+                if (settings.WatchedProcessNames == null)
+                    settings.WatchedProcessNames = new List<string>();
+                bool exists = false;
+                foreach (string name in settings.WatchedProcessNames)
+                {
+                    if (string.Equals(name, selected, StringComparison.OrdinalIgnoreCase))
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists)
+                {
+                    settings.WatchedProcessNames.Add(selected);
+                    settings.WatchedProcessName = selected;
+                }
+                BuildProcessSelectionControls();
                 processWasDetected = IsWatchedProcessActive();
                 UpdateProcessWatchUi();
                 if (!initializing) SaveSettings();
@@ -823,7 +1027,9 @@ namespace TarkovAutoShade
 
         private void InitializeProcessWatcher()
         {
+            settings.Normalize();
             RefreshProcessList();
+            BuildProcessSelectionControls();
             ProcessWatchCheckBox.IsChecked = settings.ProcessWatchEnabled;
             processWasDetected = IsWatchedProcessActive();
             UpdateProcessWatchUi(processWasDetected);
@@ -843,9 +1049,12 @@ namespace TarkovAutoShade
 
         private void RefreshProcessList()
         {
-            string selected = string.IsNullOrWhiteSpace(settings.WatchedProcessName) ?
-                "EscapeFromTarkov.exe" : settings.WatchedProcessName;
-            var names = new List<string> { "EscapeFromTarkov.exe" };
+            var names = new List<string>();
+            foreach (string defaults in AppSettings.DefaultWatchedProcessNames)
+            {
+                if (!names.Contains(defaults, StringComparer.OrdinalIgnoreCase))
+                    names.Add(defaults);
+            }
             try
             {
                 foreach (Process process in Process.GetProcesses())
@@ -853,7 +1062,7 @@ namespace TarkovAutoShade
                     try
                     {
                         string name = process.ProcessName + ".exe";
-                        if (!names.Contains(name)) names.Add(name);
+                        if (!names.Contains(name, StringComparer.OrdinalIgnoreCase)) names.Add(name);
                     }
                     finally
                     {
@@ -863,7 +1072,6 @@ namespace TarkovAutoShade
             }
             catch { }
             names.Sort(StringComparer.OrdinalIgnoreCase);
-            if (!names.Contains(selected)) names.Insert(0, selected);
 
             bool wasInitializing = initializing;
             initializing = true;
@@ -871,7 +1079,14 @@ namespace TarkovAutoShade
             {
                 ProcessComboBox.Items.Clear();
                 foreach (string name in names) ProcessComboBox.Items.Add(name);
-                ProcessComboBox.SelectedItem = selected;
+                // 下拉框不再代表“唯一侦听”，默认选中第一个已侦听项，仅用于继续添加。
+                string hint = null;
+                if (settings.WatchedProcessNames != null && settings.WatchedProcessNames.Count > 0)
+                    hint = settings.WatchedProcessNames[0];
+                if (!string.IsNullOrWhiteSpace(hint) && names.Contains(hint, StringComparer.OrdinalIgnoreCase))
+                    ProcessComboBox.SelectedItem = names.Find(delegate(string n) { return string.Equals(n, hint, StringComparison.OrdinalIgnoreCase); });
+                else if (names.Count > 0)
+                    ProcessComboBox.SelectedIndex = 0;
             }
             finally
             {
@@ -879,15 +1094,137 @@ namespace TarkovAutoShade
             }
         }
 
-        private bool IsWatchedProcessRunning()
+        private void BuildProcessSelectionControls()
         {
-            string processName = GetWatchedProcessName();
-            if (string.IsNullOrWhiteSpace(processName)) return false;
+            if (ProcessSelectionPanel == null) return;
+            updatingProcessSelection = true;
             try
             {
-                Process[] processes = Process.GetProcessesByName(processName);
-                foreach (Process process in processes) process.Dispose();
-                return processes.Length > 0;
+                ProcessSelectionPanel.Children.Clear();
+                if (settings.WatchedProcessNames == null || settings.WatchedProcessNames.Count == 0)
+                {
+                    var empty = new TextBlock
+                    {
+                        Text = "暂无侦听进程，请勾选原版/竞技场或从下拉框添加。",
+                        FontFamily = (System.Windows.Media.FontFamily)FindResource("FontUi"),
+                        FontSize = 10,
+                        Foreground = (System.Windows.Media.Brush)FindResource("PhosphorDimBrush"),
+                        TextWrapping = TextWrapping.Wrap
+                    };
+                    ProcessSelectionPanel.Children.Add(empty);
+                    return;
+                }
+                foreach (string name in settings.WatchedProcessNames)
+                {
+                    string captured = name;
+                    var checkBox = new CheckBox
+                    {
+                        Content = AppSettings.GetFriendlyProcessName(captured) + "｜" + captured,
+                        Tag = captured,
+                        IsChecked = true,
+                        Style = (Style)FindResource("TacticalCheckBox"),
+                        Margin = new Thickness(0, 0, 0, 6),
+                        ToolTip = "取消勾选即停止侦听此进程，可同时侦听原版+竞技场。"
+                    };
+                    checkBox.Checked += OnProcessSelectionChanged;
+                    checkBox.Unchecked += OnProcessSelectionChanged;
+                    ProcessSelectionPanel.Children.Add(checkBox);
+                }
+            }
+            finally
+            {
+                updatingProcessSelection = false;
+            }
+        }
+
+        private void OnProcessSelectionChanged(object sender, RoutedEventArgs e)
+        {
+            if (initializing || updatingProcessSelection) return;
+            var remaining = new List<string>();
+            if (ProcessSelectionPanel != null)
+            {
+                foreach (UIElement element in ProcessSelectionPanel.Children)
+                {
+                    var checkBox = element as CheckBox;
+                    string name = checkBox == null ? null : checkBox.Tag as string;
+                    if (checkBox != null && checkBox.IsChecked == true &&
+                        !string.IsNullOrWhiteSpace(name)) remaining.Add(name);
+                }
+            }
+            if (remaining.Count == 0)
+            {
+                ShowNotification("请至少保留一个侦听进程", NotificationType.Warning);
+                BuildProcessSelectionControls();
+                return;
+            }
+            settings.WatchedProcessNames = remaining;
+            settings.WatchedProcessName = remaining[0];
+            processWasDetected = IsWatchedProcessActive();
+            UpdateProcessWatchUi();
+            SaveSettings();
+        }
+
+        private List<string> GetWatchedProcessNames()
+        {
+            var result = new List<string>();
+            if (settings.WatchedProcessNames != null)
+            {
+                foreach (string name in settings.WatchedProcessNames)
+                {
+                    if (!string.IsNullOrWhiteSpace(name))
+                        result.Add(Path.GetFileName(name));
+                }
+            }
+            if (result.Count == 0 && !string.IsNullOrWhiteSpace(settings.WatchedProcessName))
+                result.Add(Path.GetFileName(settings.WatchedProcessName));
+            return result;
+        }
+
+        private string GetActiveWatchedProcessName()
+        {
+            IntPtr foregroundWindow = GetForegroundWindow();
+            if (foregroundWindow == IntPtr.Zero) return null;
+            uint processId;
+            if (GetWindowThreadProcessId(foregroundWindow, out processId) == 0 ||
+                processId == 0) return null;
+            try
+            {
+                using (Process process = Process.GetProcessById((int)processId))
+                {
+                    string foreground = process.ProcessName;
+                    foreach (string watched in GetWatchedProcessNames())
+                    {
+                        string baseName = Path.GetFileNameWithoutExtension(watched);
+                        if (string.Equals(foreground, baseName, StringComparison.OrdinalIgnoreCase))
+                            return watched;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private bool IsWatchedProcessRunning()
+        {
+            List<string> watched = GetWatchedProcessNames();
+            if (watched.Count == 0) return false;
+            try
+            {
+                foreach (string full in watched)
+                {
+                    string baseName = Path.GetFileNameWithoutExtension(full);
+                    if (string.IsNullOrWhiteSpace(baseName)) continue;
+                    Process[] processes = Process.GetProcessesByName(baseName);
+                    try
+                    {
+                        if (processes.Length > 0) return true;
+                    }
+                    finally
+                    {
+                        foreach (Process process in processes) process.Dispose();
+                    }
+                }
+                return false;
             }
             catch
             {
@@ -897,34 +1234,106 @@ namespace TarkovAutoShade
 
         private bool IsWatchedProcessActive()
         {
-            string watchedName = GetWatchedProcessName();
-            if (string.IsNullOrWhiteSpace(watchedName)) return false;
-
-            IntPtr foregroundWindow = GetForegroundWindow();
-            if (foregroundWindow == IntPtr.Zero) return false;
-            uint processId;
-            if (GetWindowThreadProcessId(foregroundWindow, out processId) == 0 ||
-                processId == 0) return false;
-
-            try
-            {
-                using (Process process = Process.GetProcessById((int)processId))
-                {
-                    return string.Equals(process.ProcessName, watchedName,
-                        StringComparison.OrdinalIgnoreCase);
-                }
-            }
-            catch
-            {
-                return false;
-            }
+            return GetActiveWatchedProcessName() != null;
         }
 
-        private string GetWatchedProcessName()
+        private void BindProfileEvents()
         {
-            string configured = settings.WatchedProcessName;
-            return string.IsNullOrWhiteSpace(configured) ? "" :
-                Path.GetFileNameWithoutExtension(configured);
+            ProfileEftButton.Click += delegate
+            {
+                if (initializing) return;
+                // 手动点档案即视为锁定，否则下一次前台变化会立刻把它盖回去。
+                settings.ProfileFollowGame = false;
+                ProfileFollowGameCheckBox.IsChecked = false;
+                SwitchProfile(AppSettings.ProfileKeyEft);
+            };
+            ProfileArenaButton.Click += delegate
+            {
+                if (initializing) return;
+                settings.ProfileFollowGame = false;
+                ProfileFollowGameCheckBox.IsChecked = false;
+                SwitchProfile(AppSettings.ProfileKeyArena);
+            };
+            ProfileFollowGameCheckBox.Checked += delegate
+            {
+                if (initializing || switchingProfile) return;
+                settings.ProfileFollowGame = true;
+                SyncProfileToForeground();
+                SaveSettings();
+            };
+            ProfileFollowGameCheckBox.Unchecked += delegate
+            {
+                if (initializing || switchingProfile) return;
+                settings.ProfileFollowGame = false;
+                SaveSettings();
+            };
+        }
+
+        private int ResolveDesiredProfileKey()
+        {
+            if (!settings.ProfileFollowGame) return settings.LockedProfileKey;
+            // GetActiveWatchedProcessName 走 Win32 GetForegroundWindow，只能 UI 线程调。
+            string foreground = GetActiveWatchedProcessName();
+            // 没有游戏在前台时保持现状，避免刚切出去就被打回原版。
+            if (string.IsNullOrWhiteSpace(foreground)) return activeProfileKey;
+            return AppSettings.ResolveGameKey(foreground);
+        }
+
+        private void SyncProfileToForeground()
+        {
+            if (initializing || closing || switchingProfile) return;
+            SwitchProfile(ResolveDesiredProfileKey());
+        }
+
+        private void SwitchProfile(int newKey)
+        {
+            if (newKey == activeProfileKey) return;
+            if (initializing || PresetComboBox == null)
+            {
+                activeProfileKey = newKey;
+                return;
+            }
+            switchingProfile = true;
+            try
+            {
+                // 先把界面上的当前值收进旧档案，再把新档案铺回界面。
+                SyncSettingsFromSliders();
+                settings.GetProfile(activeProfileKey).CaptureFrom(settings);
+                activeProfileKey = newKey;
+                settings.LockedProfileKey = newKey;
+                settings.GetProfile(newKey).ApplyTo(settings);
+                ApplySettingsToSliders();
+                RefreshSliderLabels();
+            }
+            finally
+            {
+                switchingProfile = false;
+            }
+            // EMA 带着上一个游戏的旧场景会慢半拍，切档必须清掉。
+            if (realtimeController != null) realtimeController.ResetSceneState();
+            UpdateCurrentRecommendation();
+            UpdateProfileUi();
+            SaveSettings();
+        }
+
+        private void UpdateProfileUi()
+        {
+            if (ProfileStatusText == null || settings == null) return;
+            try
+            {
+                bool eft = activeProfileKey == AppSettings.ProfileKeyEft;
+                ProfileStatusText.Text = "当前生效：" +
+                    AppSettings.GetProfileLabel(activeProfileKey) +
+                    (settings.ProfileFollowGame ? "（跟随游戏）" : "（已锁定）");
+                Brush active = (Brush)FindResource("AmberAlertBrush");
+                Brush idleBorder = (Brush)FindResource("BorderStrongBrush");
+                Brush idleText = (Brush)FindResource("PhosphorDimBrush");
+                ProfileEftButton.BorderBrush = eft ? active : idleBorder;
+                ProfileEftButton.Foreground = eft ? active : idleText;
+                ProfileArenaButton.BorderBrush = eft ? idleBorder : active;
+                ProfileArenaButton.Foreground = eft ? idleText : active;
+            }
+            catch { }
         }
 
         private void EvaluateProcessWatch()
@@ -957,6 +1366,9 @@ namespace TarkovAutoShade
                 {
                     try
                     {
+                        // 放在 EvaluateProcessWatch 之前：那个方法在“滤镜自动启停”
+                        // 没开时会直接返回，而档案跟随应当独立生效。
+                        SyncProfileToForeground();
                         EvaluateProcessWatch();
                     }
                     finally
@@ -1022,15 +1434,191 @@ namespace TarkovAutoShade
             {
                 ProcessWatchStatusText.Text = "未启用";
             }
+            else if (active)
+            {
+                string foreground = GetActiveWatchedProcessName();
+                ProcessWatchStatusText.Text = string.IsNullOrWhiteSpace(foreground) ? "游戏前台" :
+                    AppSettings.GetFriendlyProcessName(foreground) + "前台";
+            }
             else
             {
-                ProcessWatchStatusText.Text = active ? "游戏前台" :
+                ProcessWatchStatusText.Text =
                     (IsWatchedProcessRunning() ? "进程后台运行" : "等待进程");
             }
             processWatchUiInitialized = true;
             lastProcessWatchUiEnabled = enabled;
             lastProcessWatchUiActive = active;
             lastProcessWatchUiRefreshUtc = now;
+        }
+
+        private void BindRealtimeEvents()
+        {
+            RealtimeCheckBox.Checked += delegate
+            {
+                if (initializing || updatingRealtimeControls) return;
+                settings.RealtimeEnabled = true;
+                SaveSettings();
+                UpdateRealtimeStatus("采样中");
+                UpdateModeUi();
+                if (realtimeController != null) realtimeController.Wake();
+                ShowNotification("实时全自动已开启", NotificationType.Success);
+            };
+            RealtimeCheckBox.Unchecked += delegate
+            {
+                if (initializing || updatingRealtimeControls) return;
+                settings.RealtimeEnabled = false;
+                SaveSettings();
+                UpdateRealtimeStatus("未启用");
+                UpdateModeUi();
+            };
+            RealtimeIntervalSlider.ValueChanged += delegate(object sender, RoutedPropertyChangedEventArgs<double> e)
+            {
+                int ms = (int)Math.Round(e.NewValue);
+                RealtimeIntervalValue.Text = (ms / 1000.0).ToString("0.0") + "s";
+                if (initializing || updatingRealtimeControls) return;
+                settings.RealtimeIntervalMs = Math.Max(600, Math.Min(3000, ms));
+                settingsTimer.Stop();
+                settingsTimer.Start();
+                if (realtimeController != null) realtimeController.Wake();
+            };
+            RealtimeSensitivityComboBox.SelectionChanged += delegate
+            {
+                if (initializing || updatingRealtimeControls ||
+                    RealtimeSensitivityComboBox.SelectedIndex < 0) return;
+                settings.RealtimeSensitivity = Math.Max(0, Math.Min(2,
+                    RealtimeSensitivityComboBox.SelectedIndex));
+                SaveSettings();
+                if (realtimeController != null) realtimeController.Wake();
+            };
+        }
+
+        private void ApplyRealtimeSettingsToUi()
+        {
+            updatingRealtimeControls = true;
+            try
+            {
+                RealtimeCheckBox.IsChecked = settings.RealtimeEnabled;
+                RealtimeIntervalSlider.Value = Math.Max(
+                    RealtimeIntervalSlider.Minimum, Math.Min(
+                        RealtimeIntervalSlider.Maximum, settings.RealtimeIntervalMs));
+                RealtimeIntervalValue.Text =
+                    (settings.RealtimeIntervalMs / 1000.0).ToString("0.0") + "s";
+                RealtimeSensitivityComboBox.SelectedIndex = Math.Max(0, Math.Min(2,
+                    settings.RealtimeSensitivity));
+            }
+            finally
+            {
+                updatingRealtimeControls = false;
+            }
+            UpdateRealtimeStatus(settings.RealtimeEnabled ? "采样中" : "未启用");
+        }
+
+        private void SyncRealtimeSettingsFromUi()
+        {
+            settings.RealtimeEnabled = RealtimeCheckBox.IsChecked == true;
+            settings.RealtimeIntervalMs = Math.Max(600, Math.Min(3000,
+                (int)Math.Round(RealtimeIntervalSlider.Value)));
+            if (RealtimeSensitivityComboBox.SelectedIndex >= 0)
+                settings.RealtimeSensitivity = Math.Max(0, Math.Min(2,
+                    RealtimeSensitivityComboBox.SelectedIndex));
+        }
+
+        private void InitializeRealtime()
+        {
+            if (realtimeController != null) return;
+            realtimeController = new RealtimeController {
+                AcquireSettings = delegate
+                {
+                    try
+                    {
+                        if (closing || Dispatcher.HasShutdownStarted) return settings;
+                        AppSettings snapshot = null;
+                        Dispatcher.Invoke(new Action(delegate
+                        {
+                            snapshot = CreateSettingsSnapshot();
+                        }));
+                        return snapshot ?? settings;
+                    }
+                    catch { return settings; }
+                },
+                AcquireTargets = GetTargetDisplayDevices,
+                IsGameForeground = delegate
+                {
+                    if (!settings.ProcessWatchEnabled) return true;
+                    return IsWatchedProcessActive();
+                },
+                IsManualFilterOn = delegate { return filterModeEnabled; },
+                IsClosing = delegate { return closing; }
+            };
+            realtimeController.StableScene += OnRealtimeFrame;
+            realtimeController.StatusChanged += OnRealtimeStatus;
+            realtimeController.Faulted += OnRealtimeFaulted;
+            realtimeController.Start();
+        }
+
+        private void OnRealtimeFrame(RealtimeFrame frame)
+        {
+            if (closing || Dispatcher.HasShutdownStarted)
+            {
+                frame.Dispose();
+                return;
+            }
+            int version = Interlocked.Increment(ref realtimeVersion);
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    if (closing || version != realtimeVersion)
+                    {
+                        frame.Dispose();
+                        return;
+                    }
+                    currentAnalysis = frame.Analysis;
+                    lastAnalyzedPath = frame.Analysis == null ? lastAnalyzedPath : frame.Analysis.FilePath;
+                    previewControl.SetContent(
+                        frame.OriginalPreview, frame.FilteredPreview, currentAnalysis);
+                    frame.OriginalPreview = null;
+                    frame.FilteredPreview = null;
+                    PreviewEmptyState.Visibility = Visibility.Collapsed;
+                    UpdateAnalysisMetrics(currentAnalysis);
+                    // 手动关闭时只更新预览，不抢回滤镜，避免和用户意图打架。
+                    if (filterModeEnabled && currentAnalysis != null && currentAnalysis.IsUsable)
+                        ApplyRecommendation(currentAnalysis, false, true);
+                    else
+                        UpdateModeUi();
+                }));
+            }
+            catch { frame.Dispose(); }
+        }
+
+        private void OnRealtimeStatus(string status)
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    if (!closing) UpdateRealtimeStatus(status);
+                }));
+            }
+            catch { }
+        }
+
+        private void OnRealtimeFaulted(string message)
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    if (!closing) ShowNotification(message, NotificationType.Warning);
+                }));
+            }
+            catch { }
+        }
+
+        private void UpdateRealtimeStatus(string status)
+        {
+            if (RealtimeStatusText == null) return;
+            RealtimeStatusText.Text = status ?? "";
         }
 
         private void RefreshMonitorCapabilities()
@@ -1126,24 +1714,89 @@ namespace TarkovAutoShade
             if (slider == MonitorBrightnessSlider)
             {
                 MonitorBrightnessValue.Text = value.ToString();
-                string error;
-                if (!ddcController.SetBrightness(displayDevice, value, out error))
-                    ShowNotification(error, NotificationType.Warning);
+                pendingBrightness = value;
+            }
+            else if (slider == MonitorContrastSlider)
+            {
+                MonitorContrastValue.Text = value.ToString();
+                pendingContrast = value;
             }
             else
             {
-                MonitorContrastValue.Text = value.ToString();
-                string error;
-                if (!ddcController.SetContrast(displayDevice, value, out error))
-                    ShowNotification(error, NotificationType.Warning);
+                return;
             }
+            pendingDdcDevice = displayDevice;
+            if (ddcDebounceTimer == null)
+            {
+                ddcDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(280) };
+                ddcDebounceTimer.Tick += delegate
+                {
+                    ddcDebounceTimer.Stop();
+                    FlushPendingDdc();
+                };
+            }
+            ddcDebounceTimer.Stop();
+            ddcDebounceTimer.Start();
+        }
+
+        private void FlushPendingDdc()
+        {
+            if (string.IsNullOrWhiteSpace(pendingDdcDevice)) return;
+            int brightness = pendingBrightness;
+            int contrast = pendingContrast;
+            string targetDevice = pendingDdcDevice;
+            pendingBrightness = -1;
+            pendingContrast = -1;
+            Task.Factory.StartNew(delegate
+            {
+                var result = new DdcWriteResult();
+                if (brightness >= 0)
+                {
+                    string brightnessError = "";
+                    result.BrightnessOk = ddcController.SetBrightness(targetDevice, brightness, out brightnessError);
+                    result.BrightnessError = brightnessError;
+                }
+                if (contrast >= 0)
+                {
+                    string contrastError = "";
+                    result.ContrastOk = ddcController.SetContrast(targetDevice, contrast, out contrastError);
+                    result.ContrastError = contrastError;
+                }
+                return result;
+            }).ContinueWith(delegate(Task<DdcWriteResult> task)
+            {
+                if (closing || Dispatcher.HasShutdownStarted) return;
+                if (task.IsFaulted || task.IsCanceled) return;
+                try
+                {
+                    Dispatcher.BeginInvoke(new Action(delegate
+                    {
+                        if (closing) return;
+                        DdcWriteResult result = task.Result;
+                        if (!result.BrightnessOk && !string.IsNullOrWhiteSpace(result.BrightnessError))
+                            ShowNotification(result.BrightnessError, NotificationType.Warning);
+                        else if (!result.ContrastOk && !string.IsNullOrWhiteSpace(result.ContrastError))
+                            ShowNotification(result.ContrastError, NotificationType.Warning);
+                    }));
+                }
+                catch { }
+            });
+        }
+
+        private sealed class DdcWriteResult
+        {
+            public bool BrightnessOk = true;
+            public string BrightnessError = "";
+            public bool ContrastOk = true;
+            public string ContrastError = "";
         }
 
         private void BindPresetEvents()
         {
             PresetComboBox.SelectionChanged += delegate
             {
-                if (initializing || PresetComboBox.SelectedIndex < 0) return;
+                // switchingProfile：切档时是程序在铺值，不能把新档案的预设又覆盖掉。
+                if (initializing || switchingProfile || PresetComboBox.SelectedIndex < 0) return;
                 int index = PresetComboBox.SelectedIndex;
                 if (promotingCustomPreset) return;
                 if (index == 5)
@@ -1286,7 +1939,10 @@ namespace TarkovAutoShade
             {
                 Dispatcher.BeginInvoke(new Action(delegate
                 {
-                    if (!closing && settings.AutoWatch) AnalyzePath(filePath, true);
+                    if (closing || !settings.AutoWatch) return;
+                    // 截图来自哪个游戏的目录，就用哪一套参数来分析。
+                    SwitchProfile(AppSettings.ResolveGameKey(filePath));
+                    AnalyzePath(filePath, true);
                 }));
             }
             catch { }
@@ -1305,7 +1961,25 @@ namespace TarkovAutoShade
             catch { }
         }
 
+        private void OnGammaTransitionFailed(string message)
+        {
+            try
+            {
+                Dispatcher.BeginInvoke(new Action(delegate
+                {
+                    if (!closing) ShowNotification("应用滤镜失败：" + message,
+                        NotificationType.Error);
+                }));
+            }
+            catch { }
+        }
+
         private void AnalyzePath(string filePath, bool applyWhenReady)
+        {
+            AnalyzePath(filePath, applyWhenReady, 0);
+        }
+
+        private void AnalyzePath(string filePath, bool applyWhenReady, int retryAttempt)
         {
             if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
             {
@@ -1340,9 +2014,11 @@ namespace TarkovAutoShade
                 }
                 try
                 {
+                    string capturedPath = filePath;
+                    int capturedRetry = retryAttempt;
                     Dispatcher.BeginInvoke(new Action(delegate
                     {
-                        CompleteAnalysis(task, version, applyWhenReady);
+                        CompleteAnalysis(task, version, applyWhenReady, capturedPath, capturedRetry);
                     }));
                 }
                 catch
@@ -1355,6 +2031,13 @@ namespace TarkovAutoShade
         private void CompleteAnalysis(
             Task<AnalysisPackage> task, int version, bool applyWhenReady)
         {
+            CompleteAnalysis(task, version, applyWhenReady, null, 1);
+        }
+
+        private void CompleteAnalysis(
+            Task<AnalysisPackage> task, int version, bool applyWhenReady,
+            string filePath, int retryAttempt)
+        {
             AnalyzeButton.IsEnabled = true;
             if (closing || version != analysisVersion)
             {
@@ -1366,8 +2049,21 @@ namespace TarkovAutoShade
             {
                 Exception error = task.Exception == null ? null :
                     task.Exception.GetBaseException();
-                ShowNotification("分析失败：" +
-                    (error == null ? "UNKNOWN_ERROR" : error.Message),
+                string message = error == null ? "UNKNOWN_ERROR" : error.Message;
+                if (retryAttempt < 1 && !string.IsNullOrWhiteSpace(filePath) &&
+                    File.Exists(filePath) && message.Contains("尚未写入完成"))
+                {
+                    ShowNotification("截图正在写入，稍后自动重试…", NotificationType.Info);
+                    var retryTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
+                    retryTimer.Tick += delegate
+                    {
+                        retryTimer.Stop();
+                        if (!closing) AnalyzePath(filePath, applyWhenReady, retryAttempt + 1);
+                    };
+                    retryTimer.Start();
+                    return;
+                }
+                ShowNotification("分析失败：" + message,
                     NotificationType.Error);
                 return;
             }
@@ -1465,12 +2161,23 @@ namespace TarkovAutoShade
             UpdateAnalysisMetrics(currentAnalysis);
             previewRefreshTimer.Stop();
             previewRefreshTimer.Start();
+            if (realtimeController != null) realtimeController.Wake();
         }
 
         private void ApplyRecommendation(AnalysisResult analysis)
         {
+            ApplyRecommendation(analysis, false, false);
+        }
+
+        private void ApplyRecommendation(AnalysisResult analysis, bool manualTrigger)
+        {
+            ApplyRecommendation(analysis, manualTrigger, false);
+        }
+
+        private void ApplyRecommendation(AnalysisResult analysis, bool manualTrigger, bool silent)
+        {
             if (analysis == null || analysis.Recommendation == null) return;
-            if (settings.ProcessWatchEnabled && !IsWatchedProcessActive())
+            if (!manualTrigger && settings.ProcessWatchEnabled && !IsWatchedProcessActive())
             {
                 autoPausedByProcess = true;
                 filterModeEnabled = true;
@@ -1509,8 +2216,10 @@ namespace TarkovAutoShade
             }
             RecoveryStore.Save(baselineRamps);
 
+            // 过渡时长随滤镜落差缩放：小调整要跟手，跨场景大切换要拉长，
+            // 否则同样的落差会在几百毫秒里被压成几帧台阶。
             int duration = settings.SmoothTransition ?
-                280 + (int)Math.Round(recommendation.ChangeStrength * 120.0) : 0;
+                260 + (int)Math.Round(recommendation.ChangeStrength * 900.0) : 0;
             if (!gammaController.TransitionTo(targetDevices, recommendation,
                 duration, out error))
             {
@@ -1522,8 +2231,9 @@ namespace TarkovAutoShade
             ObsFilterStateStore.WriteActive(recommendation, duration);
             filterModeEnabled = true;
             UpdateModeUi();
-            ShowNotification("已应用：" + recommendation.ProfileName,
-                NotificationType.Success);
+            if (!silent)
+                ShowNotification("已应用：" + recommendation.ProfileName,
+                    NotificationType.Success);
         }
 
         private void ToggleFilter()
@@ -1544,24 +2254,16 @@ namespace TarkovAutoShade
                 return;
             }
 
-            if (settings.ProcessWatchEnabled && !IsWatchedProcessActive())
-            {
-                autoPausedByProcess = true;
-                filterModeEnabled = true;
-                ObsFilterStateStore.WriteDisabled();
-                UpdateModeUi();
-                ShowNotification("未检测到侦听进程，滤镜保持关闭", NotificationType.Info);
-                return;
-            }
-
             filterModeEnabled = true;
+            autoPausedByProcess = false;
             if (currentAnalysis != null && currentAnalysis.IsUsable)
-                ApplyRecommendation(currentAnalysis);
+                ApplyRecommendation(currentAnalysis, true);
             else
             {
                 UpdateModeUi();
                 ShowNotification("滤镜已开启，等待分析截图", NotificationType.Info);
             }
+            if (realtimeController != null) realtimeController.Wake();
         }
 
         private void RestoreOriginal(bool showNotification)
@@ -1587,7 +2289,7 @@ namespace TarkovAutoShade
             string[] modes = { "自动分析", "自然中性", "室内柔和", "夜视护眼", "高光保护", "自定义预设" };
             int index = PresetComboBox == null ? 0 : PresetComboBox.SelectedIndex;
             if (index < 0 || index >= modes.Length) index = 0;
-            ModeText.Text = modes[index];
+            ModeText.Text = modes[index] + (settings.RealtimeEnabled ? " · 实时" : "");
             bool running = IsFilterRunning();
             RunStateText.Text = running ? "运行中" : "未运行";
             RunStateText.Foreground = running ?
@@ -1617,7 +2319,22 @@ namespace TarkovAutoShade
             StatusDot.ToolTip = IsFilterRunning() ? "滤镜正在运行；截图监听：" +
                 (active ? "已启用" : "未启用") : "滤镜未运行；截图监听：" +
                 (active ? "已启用" : "未启用");
-            bool folderReady = Directory.Exists(settings.ScreenshotFolder);
+            bool folderReady = screenshotWatcher.Folders.Count > 0;
+            if (!folderReady && settings.ScreenshotFolders != null)
+            {
+                foreach (string folder in settings.ScreenshotFolders)
+                {
+                    try
+                    {
+                        if (!string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder))
+                        {
+                            folderReady = true;
+                            break;
+                        }
+                    }
+                    catch { }
+                }
+            }
             FolderPath.Foreground = folderReady ?
                 (System.Windows.Media.Brush)FindResource("AmberAlertBrush") :
                 (System.Windows.Media.Brush)FindResource("HazardRedBrush");
@@ -1679,6 +2396,9 @@ namespace TarkovAutoShade
             WarmthSlider.Value = settings.Warmth;
             SaturationSlider.Value = settings.SaturationBias;
             UpdateHotkeyUi();
+            if (ProfileFollowGameCheckBox != null)
+                ProfileFollowGameCheckBox.IsChecked = settings.ProfileFollowGame;
+            UpdateProfileUi();
         }
 
         private void RefreshSliderLabels()
@@ -1735,16 +2455,30 @@ namespace TarkovAutoShade
 
         private void SaveSettings()
         {
-            if (closing) return;
+            if (closing || initializing) return;
             SyncSettingsFromSliders();
-            settings.ScreenshotFolder = FolderPath.Text == "未找到截图目录" ?
-                settings.ScreenshotFolder : FolderPath.Text;
+            SyncRealtimeSettingsFromUi();
+            SyncFoldersAndProcessesFromUi();
+            // 平铺字段只是当前档案的镜像，落盘前必须写回对应档案，
+            // 否则切换之后这次的改动会丢。
+            settings.GetProfile(activeProfileKey).CaptureFrom(settings);
             SettingsStore.Save(settings);
+        }
+
+        private void SyncFoldersAndProcessesFromUi()
+        {
+            // 文件夹与进程列表由各自面板实时同步到 settings，这里只做一致性兜底：
+            // 保持 legacy 单值字段指向列表首项，供旧逻辑/旧测试兼容。
+            if (settings.ScreenshotFolders != null && settings.ScreenshotFolders.Count > 0)
+                settings.ScreenshotFolder = settings.ScreenshotFolders[0];
+            if (settings.WatchedProcessNames != null && settings.WatchedProcessNames.Count > 0)
+                settings.WatchedProcessName = settings.WatchedProcessNames[0];
         }
 
         private AppSettings CreateSettingsSnapshot()
         {
             ApplySettingsToModel();
+            SyncRealtimeSettingsFromUi();
             var snapshot = AppSettings.CreateDefault();
             snapshot.AlgorithmVersion = settings.AlgorithmVersion;
             snapshot.ShadowTarget = settings.ShadowTarget;
@@ -1758,6 +2492,9 @@ namespace TarkovAutoShade
             snapshot.SceneGuard = settings.SceneGuard;
             snapshot.BlackPoint = settings.BlackPoint;
             snapshot.SaturationBias = settings.SaturationBias;
+            snapshot.RealtimeEnabled = settings.RealtimeEnabled;
+            snapshot.RealtimeIntervalMs = settings.RealtimeIntervalMs;
+            snapshot.RealtimeSensitivity = settings.RealtimeSensitivity;
             snapshot.Normalize();
             return snapshot;
         }
@@ -1813,15 +2550,15 @@ namespace TarkovAutoShade
         {
             var about = new Window
             {
-                Title = "关于 TarkovAutoShade",
+                Title = "关于 TarkovAutoShadePlus",
                 Owner = this,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Width = 460,
-                Height = 330,
+                Height = 352,
                 MinWidth = 460,
-                MinHeight = 330,
+                MinHeight = 352,
                 MaxWidth = 460,
-                MaxHeight = 330,
+                MaxHeight = 352,
                 ResizeMode = ResizeMode.NoResize,
                 ShowInTaskbar = false,
                 Background = (Brush)FindResource("CrtSurfaceBrush"),
@@ -1833,7 +2570,7 @@ namespace TarkovAutoShade
                 Margin = new Thickness(24, 24, 24, 12)
             };
             content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(40) });
-            content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(62) });
+            content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(84) });
             content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });
             content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });
             content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });
@@ -1845,7 +2582,7 @@ namespace TarkovAutoShade
 
             var title = new TextBlock
             {
-                Text = "TarkovAutoShade",
+                Text = "TarkovAutoShadePlus",
                 FontFamily = (System.Windows.Media.FontFamily)FindResource("FontDisplay"),
                 FontSize = 24,
                 FontWeight = FontWeights.Black,
@@ -1856,7 +2593,7 @@ namespace TarkovAutoShade
 
             var details = new TextBlock
             {
-                Text = "版本：1.1.0\n作者：lub大萝卜\n免费分享，禁止倒卖",
+                Text = "版本：2.0.0\n原作者：lub大萝卜\n二改：a1175815821\n免费分享，禁止倒卖",
                 FontFamily = (System.Windows.Media.FontFamily)FindResource("FontMono"),
                 FontSize = 12,
                 Foreground = (Brush)FindResource("PhosphorDimBrush"),
@@ -1921,7 +2658,7 @@ namespace TarkovAutoShade
 
             var github = new TextBlock
             {
-                Text = "GitHub仓库：TarkovAutoShade",
+                Text = "GitHub仓库：TarkovAutoShadePlus",
                 FontFamily = (System.Windows.Media.FontFamily)FindResource("FontMono"),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
@@ -1937,7 +2674,7 @@ namespace TarkovAutoShade
                 {
                     Process.Start(new ProcessStartInfo
                     {
-                        FileName = "https://github.com/lu1249765686/TarkovAutoShade",
+                        FileName = "https://github.com/a1175815821/TarkovAutoShadePlus",
                         UseShellExecute = true
                     });
                 }
@@ -2191,11 +2928,19 @@ namespace TarkovAutoShade
             closing = true;
             Interlocked.Increment(ref analysisVersion);
             Interlocked.Increment(ref previewVersion);
+            Interlocked.Increment(ref realtimeVersion);
+            if (realtimeController != null)
+            {
+                try { realtimeController.Dispose(); }
+                catch { }
+                realtimeController = null;
+            }
             if (timestampTimer != null) timestampTimer.Stop();
             if (statusDotTimer != null) statusDotTimer.Stop();
             if (settingsTimer != null) settingsTimer.Stop();
             if (previewRefreshTimer != null) previewRefreshTimer.Stop();
             if (processWatchTimer != null) processWatchTimer.Stop();
+            if (ddcDebounceTimer != null) ddcDebounceTimer.Stop();
             if (foregroundWindowEventHook != IntPtr.Zero)
             {
                 UnhookWinEvent(foregroundWindowEventHook);
@@ -2204,6 +2949,12 @@ namespace TarkovAutoShade
             screenshotWatcher.Dispose();
             toggleHotkey?.Dispose();
             SyncSettingsFromSliders();
+            try { SyncRealtimeSettingsFromUi(); }
+            catch { }
+            SyncFoldersAndProcessesFromUi();
+            // 平铺字段只是当前档案的镜像，落盘前必须写回对应档案，
+            // 否则切换之后这次的改动会丢。
+            settings.GetProfile(activeProfileKey).CaptureFrom(settings);
             SettingsStore.Save(settings);
             string ignored;
             gammaController.RestoreAll(out ignored);

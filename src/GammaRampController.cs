@@ -1,16 +1,20 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     internal sealed class GammaRampController : IDisposable
     {
-        private const int TransitionIntervalMilliseconds = 75;
+        private const int TransitionIntervalMilliseconds = 40;
+        // 步数太少时，一次跨场景切换会被切成肉眼可见的几级台阶。
+        // 因此先按目标时长反推 tick 间隔，并给一个步数下限。
+        private const int MinimumTransitionSteps = 10;
         private readonly object sync = new object();
         private readonly Dictionary<string, GammaRamp> baselines =
             new Dictionary<string, GammaRamp>(StringComparer.OrdinalIgnoreCase);
@@ -19,14 +23,17 @@ namespace TarkovAutoShade
         private readonly HashSet<string> activeDevices =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private System.Threading.Timer transitionTimer;
-        private int transitionStep;
-        private int transitionSteps;
+        private int transitionIntervalMilliseconds;
+        private double transitionDurationMilliseconds;
+        private Stopwatch transitionClock;
         private readonly Dictionary<string, GammaRamp> transitionFromRamps =
             new Dictionary<string, GammaRamp>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, GammaRamp> transitionToRamps =
             new Dictionary<string, GammaRamp>(StringComparer.OrdinalIgnoreCase);
         private bool hasTransition;
         private bool disposed;
+
+        public event Action<string> TransitionFailed;
 
         public bool HasActiveFilter { get { return activeDevices.Count > 0 || hasTransition; } }
 
@@ -195,15 +202,17 @@ namespace TarkovAutoShade
                     return true;
                 }
 
-                transitionStep = 0;
-                // 75 ms keeps the transition visually smooth while reducing
-                // repeated SetDeviceGammaRamp calls on multi-monitor setups.
-                transitionSteps = Math.Max(1,
-                    durationMilliseconds / TransitionIntervalMilliseconds);
+                int steps = Math.Max(MinimumTransitionSteps,
+                    (int)Math.Round(
+                        durationMilliseconds / (double)TransitionIntervalMilliseconds));
+                transitionIntervalMilliseconds = Math.Max(16,
+                    (int)Math.Round(durationMilliseconds / (double)steps));
+                transitionDurationMilliseconds = Math.Max(1.0, durationMilliseconds);
+                transitionClock = Stopwatch.StartNew();
                 hasTransition = true;
                 transitionTimer = new System.Threading.Timer(delegate {
                     TickTransition();
-                }, null, 0, TransitionIntervalMilliseconds);
+                }, null, 0, transitionIntervalMilliseconds);
                 return true;
             }
         }
@@ -231,19 +240,38 @@ namespace TarkovAutoShade
 
         public bool RestoreAll(out string error)
         {
+            List<string> missingDevices = null;
             lock (sync)
             {
                 StopTransition();
                 error = "";
                 bool success = true;
+                var connected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                try
+                {
+                    foreach (Screen screen in Screen.AllScreens)
+                        connected.Add(screen.DeviceName);
+                }
+                catch { }
                 foreach (KeyValuePair<string, GammaRamp> item in baselines)
                 {
+                    // 已拔除的显示器不再视为恢复失败，避免换屏后误报。
+                    if (connected.Count > 0 && !connected.Contains(item.Key))
+                    {
+                        if (missingDevices == null) missingDevices = new List<string>();
+                        missingDevices.Add(item.Key);
+                        continue;
+                    }
                     string itemError;
                     if (!TrySet(item.Key, item.Value, out itemError))
                     {
                         success = false;
                         if (error.Length == 0) error = itemError;
                     }
+                }
+                if (missingDevices != null)
+                {
+                    foreach (string stale in missingDevices) baselines.Remove(stale);
                 }
                 activeDevices.Clear();
                 currentRamps.Clear();
@@ -282,6 +310,25 @@ namespace TarkovAutoShade
                 GammaRamp ramp;
                 return baselines.TryGetValue(deviceName, out ramp) ?
                     (GammaRamp?)ramp.Clone() : null;
+            }
+        }
+
+        public void PruneBaselines(IList<string> validDevices)
+        {
+            if (validDevices == null) return;
+            lock (sync)
+            {
+                var valid = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string device in validDevices)
+                {
+                    if (!string.IsNullOrWhiteSpace(device)) valid.Add(device);
+                }
+                var stale = new List<string>();
+                foreach (string device in baselines.Keys)
+                {
+                    if (!valid.Contains(device)) stale.Add(device);
+                }
+                foreach (string device in stale) baselines.Remove(device);
             }
         }
 
@@ -325,33 +372,48 @@ namespace TarkovAutoShade
 
         private void TickTransition()
         {
+            string failedDevice = null;
+            string failedError = "";
             lock (sync)
             {
                 if (transitionTimer == null || !hasTransition)
                     return;
 
-                transitionStep++;
-                double amount = MathUtil.Clamp(
-                    transitionStep / (double)transitionSteps, 0.0, 1.0);
+                // 用经过时间而不是 tick 计数来求进度：系统定时器会抖动，
+                // 按计数推进会让节奏忽快忽慢，甚至首帧就跳到 1/steps。
+                double amount = transitionClock == null ? 1.0 :
+                    MathUtil.Clamp(transitionClock.Elapsed.TotalMilliseconds /
+                        transitionDurationMilliseconds, 0.0, 1.0);
                 amount = amount * amount * (3.0 - 2.0 * amount);
                 foreach (KeyValuePair<string, GammaRamp> item in transitionToRamps)
                 {
                     GammaRamp ramp = GammaRamp.Lerp(
                         transitionFromRamps[item.Key], item.Value, amount);
-                    string ignored;
-                    if (!TrySet(item.Key, ramp, out ignored))
+                    string setError;
+                    if (!TrySet(item.Key, ramp, out setError))
                     {
+                        failedDevice = item.Key;
+                        failedError = setError;
                         StopTransition();
-                        return;
+                        break;
                     }
                     currentRamps[item.Key] = ramp;
                 }
 
-                if (transitionStep >= transitionSteps)
+                if (failedDevice == null && amount >= 1.0)
                 {
                     foreach (KeyValuePair<string, GammaRamp> item in transitionToRamps)
                         currentRamps[item.Key] = item.Value.Clone();
                     StopTransition();
+                }
+            }
+            if (failedDevice != null)
+            {
+                Action<string> handler = TransitionFailed;
+                if (handler != null)
+                {
+                    try { handler(failedDevice + "：" + failedError); }
+                    catch { }
                 }
             }
         }
@@ -384,6 +446,11 @@ namespace TarkovAutoShade
             {
                 transitionTimer.Dispose();
                 transitionTimer = null;
+            }
+            if (transitionClock != null)
+            {
+                transitionClock.Stop();
+                transitionClock = null;
             }
             hasTransition = false;
             transitionFromRamps.Clear();

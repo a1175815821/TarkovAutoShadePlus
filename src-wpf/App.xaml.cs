@@ -2,7 +2,7 @@ using System;
 using System.Threading;
 using System.Windows;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     public partial class App : Application
     {
@@ -17,8 +17,8 @@ namespace TarkovAutoShade
             {
                 instanceMutex.Dispose();
                 instanceMutex = null;
-                MessageBox.Show("TarkovAutoShade 已在运行，无法同时打开多个窗口。",
-                    "TarkovAutoShade", MessageBoxButton.OK,
+                MessageBox.Show("TarkovAutoShadePlus 已在运行，无法同时打开多个窗口。",
+                    "TarkovAutoShadePlus", MessageBoxButton.OK,
                     MessageBoxImage.Information);
                 Shutdown();
                 return;

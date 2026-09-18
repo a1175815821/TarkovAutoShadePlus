@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     internal static class RecoveryStore
     {
@@ -28,7 +28,7 @@ namespace TarkovAutoShade
 
         public static void Save(IDictionary<string, GammaRamp> ramps)
         {
-            if (Exists || ramps == null || ramps.Count == 0) return;
+            if (ramps == null || ramps.Count == 0) return;
 
             var validRamps = new List<KeyValuePair<string, GammaRamp>>();
             foreach (KeyValuePair<string, GammaRamp> item in ramps)
@@ -55,8 +55,19 @@ namespace TarkovAutoShade
                     WriteChannel(writer, item.Value.Blue);
                 }
             }
-            if (File.Exists(FilePath)) File.Delete(FilePath);
-            File.Move(temporary, FilePath);
+            if (File.Exists(FilePath))
+            {
+                try { File.Replace(temporary, FilePath, null); }
+                catch
+                {
+                    File.Delete(FilePath);
+                    File.Move(temporary, FilePath);
+                }
+            }
+            else
+            {
+                File.Move(temporary, FilePath);
+            }
         }
 
         public static bool TryLoad(out string deviceName, out GammaRamp ramp)

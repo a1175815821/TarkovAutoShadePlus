@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using TarkovAutoShade;
+using TarkovAutoShadePlus;
 
 internal static class AlgorithmSmokeTest
 {
@@ -153,7 +153,15 @@ internal static class AlgorithmSmokeTest
             Warmth = -20
         };
         legacy.Normalize();
-        if (legacy.AlgorithmVersion == 8 &&
+        bool processesOk = legacy.WatchedProcessNames != null &&
+            legacy.WatchedProcessNames.Contains(AppSettings.EftProcessName) &&
+            legacy.WatchedProcessNames.Contains(AppSettings.ArenaProcessName);
+        bool foldersOk = legacy.ScreenshotFolders != null &&
+            legacy.ScreenshotFolders.Count > 0;
+        bool realtimeOk = !legacy.RealtimeEnabled &&
+            legacy.RealtimeIntervalMs == 1200 &&
+            legacy.RealtimeSensitivity == 1;
+        if (legacy.AlgorithmVersion == 11 &&
             legacy.ShadowTarget == 70 &&
             legacy.HighlightProtection == 76 &&
             legacy.MaxStrength == 82 &&
@@ -161,7 +169,9 @@ internal static class AlgorithmSmokeTest
             legacy.ColorCorrection == 72 &&
             legacy.IndoorComfort == 72 &&
             legacy.SceneGuard == 88 &&
-            legacy.BlackPoint == 56)
+            legacy.BlackPoint == 56 &&
+            legacy.SmoothTransition &&
+            processesOk && foldersOk && realtimeOk)
             return 0;
 
         Console.Error.WriteLine("Legacy zero-strength settings were not recovered.");

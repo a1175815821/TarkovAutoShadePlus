@@ -2,12 +2,12 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 
-[assembly: AssemblyTitle("TarkovAutoShade")]
+[assembly: AssemblyTitle("TarkovAutoShadePlus")]
 [assembly: AssemblyDescription("Tactical Filter Control System")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("TarkovAutoShade")]
-[assembly: AssemblyProduct("TarkovAutoShade")]
-[assembly: AssemblyCopyright("Copyright © 2026 lub大萝卜 - 免费分享，禁止倒卖")]
+[assembly: AssemblyCompany("TarkovAutoShadePlus")]
+[assembly: AssemblyProduct("TarkovAutoShadePlus")]
+[assembly: AssemblyCopyright("Copyright © 2026 · 原作者 lub大萝卜 · 二改 a1175815821 · 免费分享，禁止倒卖")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
@@ -18,5 +18,5 @@ using System.Windows;
     ResourceDictionaryLocation.SourceAssembly
 )]
 
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("2.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]

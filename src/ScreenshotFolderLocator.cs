@@ -2,11 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     internal static class ScreenshotFolderLocator
     {
         public static string Find()
+        {
+            List<string> all = FindAll();
+            return all.Count == 0 ? null : all[0];
+        }
+
+        public static List<string> FindAll()
         {
             var roots = new List<string>();
             AddRoot(roots, Environment.GetFolderPath(
@@ -18,27 +24,46 @@ namespace TarkovAutoShade
                 Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                 "OneDrive", "Documents"));
 
-            foreach (string root in roots)
+            var found = new List<string>();
+            foreach (string gameFolderName in AppSettings.KnownGameFolderNames)
             {
-                string standard = Path.Combine(root,
-                    "Escape from Tarkov", "Screenshots");
-                if (Directory.Exists(standard)) return standard;
-
-                try
+                foreach (string root in roots)
                 {
-                    foreach (string gameFolder in Directory.GetDirectories(
-                        root, "Escape from Tarkov", SearchOption.TopDirectoryOnly))
+                    string standard = Path.Combine(root,
+                        gameFolderName, "Screenshots");
+                    AddFound(found, standard);
+
+                    try
                     {
-                        string screenshots = Path.Combine(gameFolder, "Screenshots");
-                        if (Directory.Exists(screenshots)) return screenshots;
+                        foreach (string gameFolder in Directory.GetDirectories(
+                            root, gameFolderName, SearchOption.TopDirectoryOnly))
+                        {
+                            AddFound(found, Path.Combine(gameFolder, "Screenshots"));
+                        }
+                    }
+                    catch
+                    {
+                        // An inaccessible Documents location is simply skipped.
                     }
                 }
-                catch
-                {
-                    // An inaccessible Documents location is simply skipped.
-                }
             }
-            return null;
+            return found;
+        }
+
+        private static void AddFound(List<string> found, string screenshots)
+        {
+            if (string.IsNullOrWhiteSpace(screenshots)) return;
+            try
+            {
+                if (!Directory.Exists(screenshots)) return;
+            }
+            catch { return; }
+            foreach (string existing in found)
+            {
+                if (string.Equals(existing, screenshots, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+            found.Add(screenshots);
         }
 
         private static void AddRoot(List<string> roots, string root)

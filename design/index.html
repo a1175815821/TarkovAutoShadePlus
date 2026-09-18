@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TarkovAutoShadePlus · v2.0 界面设计说明</title>
+<style>
+:root {
+  --bg: #0b0d0c;
+  --surface: #121614;
+  --surface-2: #171b19;
+  --line: #232926;
+  --line-strong: #313935;
+  --text: #e6ece8;
+  --text-dim: #9aa79f;
+  --text-muted: #6f7b74;
+  --amber: #f0a03c;
+  --amber-dim: #c97a1f;
+  --green: #4ade80;
+  --red: #ef4444;
+  --amber-faint: rgba(240, 160, 60, 0.12);
+  --green-faint: rgba(74, 222, 128, 0.12);
+  --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace;
+  --ui: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  --display: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 14px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  min-height: 100vh;
+}
+
+/* ---------- 侧栏 ---------- */
+.side {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  padding: 22px 0;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px 18px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
+}
+
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--amber), var(--amber-dim));
+  color: #1a1206;
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.brand-text { font-family: var(--display); font-size: 13.5px; font-weight: 700; }
+
+.brand-ver {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--amber-dim);
+  border-radius: 9px;
+  background: var(--amber-faint);
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.side nav { padding: 0 12px; }
+
+.side nav a {
+  display: block;
+  padding: 7px 12px;
+  margin-bottom: 2px;
+  border-radius: 6px;
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 13px;
+  transition: background .15s, color .15s;
+}
+
+.side nav a:hover { background: var(--surface-2); color: var(--text); }
+.side nav a.active { background: var(--amber-faint); color: var(--amber); font-weight: 600; }
+
+.side nav .group {
+  margin: 16px 12px 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: .08em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+/* ---------- 主区 ---------- */
+main { padding: 40px 48px 80px; max-width: 1080px; }
+
+h1 {
+  font-family: var(--display);
+  font-size: 28px;
+  font-weight: 800;
+  margin: 0 0 8px;
+  letter-spacing: -.01em;
+}
+
+.lede { color: var(--text-dim); font-size: 15px; margin: 0 0 6px; }
+
+.meta {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-bottom: 36px;
+}
+
+h2 {
+  font-family: var(--display);
+  font-size: 18px;
+  font-weight: 700;
+  margin: 44px 0 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+h2::before {
+  content: "";
+  width: 3px;
+  height: 14px;
+  border-radius: 1.5px;
+  background: var(--amber);
+  flex: 0 0 auto;
+}
+
+h3 {
+  font-size: 14.5px;
+  font-weight: 700;
+  margin: 26px 0 10px;
+}
+
+p { margin: 0 0 12px; }
+
+code {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--amber);
+}
+
+pre {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-dim);
+  margin: 0 0 16px;
+}
+
+pre code { background: none; border: none; padding: 0; color: inherit; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 18px;
+  font-size: 13px;
+}
+
+th, td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th {
+  font-size: 11.5px;
+  letter-spacing: .04em;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+td:first-child { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+
+/* ---------- 色板 ---------- */
+.swatches {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.swatch {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.swatch .chip { height: 56px; }
+
+.swatch .info {
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.swatch .info b { display: block; color: var(--text); font-size: 12px; font-weight: 600; }
+
+/* ---------- 组件样例 ---------- */
+.demo {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px;
+  margin: 0 0 18px;
+}
+
+.demo-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.demo-row:last-child { margin-bottom: 0; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--ui);
+  font-size: 12.5px;
+  cursor: default;
+}
+
+.btn.primary {
+  background: linear-gradient(180deg, var(--amber), var(--amber-dim));
+  border-color: var(--amber-dim);
+  color: #1a1206;
+  font-weight: 700;
+}
+
+.btn.sm { height: 26px; padding: 0 10px; font-size: 11.5px; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
+.pill.on { border-color: rgba(74, 222, 128, .4); background: var(--green-faint); color: var(--green); }
+.pill.on .dot { background: var(--green); }
+
+.slider-demo { flex: 1 1 220px; min-width: 180px; }
+.slider-demo .lb {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.slider-demo .lb b { font-family: var(--mono); color: var(--text); font-weight: 600; }
+.track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-strong);
+  position: relative;
+}
+.track .fill { position: absolute; inset: 0 auto 0 0; background: var(--amber); border-radius: 2px; }
+.track .knob {
+  position: absolute;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--text);
+  border: 2px solid var(--amber);
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* ---------- 提示框 ---------- */
+.note {
+  border-left: 3px solid var(--amber);
+  background: var(--amber-faint);
+  border-radius: 0 8px 8px 0;
+  padding: 12px 16px;
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.note.warn { border-left-color: var(--red); background: rgba(239, 68, 68, .1); }
+.note b { color: var(--text); }
+
+/* ---------- 布局示意 ---------- */
+.wire {
+  display: grid;
+  grid-template-columns: 300px 1fr 300px;
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.wire-col {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 10px;
+  min-height: 220px;
+}
+
+.wire-col .wt {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.wire-box {
+  border: 1px dashed var(--line-strong);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.wire-box b { display: block; color: var(--text); font-size: 12.5px; font-weight: 600; }
+.wire-box.new { border-color: var(--amber-dim); background: var(--amber-faint); }
+.wire-box.new b { color: var(--amber); }
+
+/* ---------- 页脚 ---------- */
+footer {
+  margin-top: 56px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+footer a { color: var(--text-dim); text-decoration: none; border-bottom: 1px dotted var(--line-strong); }
+footer a:hover { color: var(--amber); border-bottom-color: var(--amber); }
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .side { position: static; height: auto; border-right: none; border-bottom: 1px solid var(--line); }
+  main { padding: 28px 20px 60px; }
+  .wire { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+  <aside class="side">
+    <div class="brand">
+      <div class="brand-mark">TA</div>
+      <div class="brand-text">TarkovAutoShade<span class="brand-ver">v2.0</span></div>
+    </div>
+    <nav>
+      <div class="group">概览</div>
+      <a href="#intro">这是什么</a>
+      <a href="#changelog">v2.0 变化</a>
+
+      <div class="group">视觉体系</div>
+      <a href="#color">色彩</a>
+      <a href="#type">字体</a>
+      <a href="#space">间距与圆角</a>
+
+      <div class="group">组件</div>
+      <a href="#components">基础组件</a>
+      <a href="#layout">三栏布局</a>
+      <a href="#motion">动效与过渡</a>
+
+      <div class="group">流程</div>
+      <a href="#flow">分析到应用</a>
+      <a href="#limits">已知限制</a>
+    </nav>
+  </aside>
+
+  <main>
+
+    <h1>TarkovAutoShadePlus 界面设计说明</h1>
+    <p class="lede">Windows 本地 SDR 显示滤镜工具，面向《Escape from Tarkov》与《Escape from Tarkov Arena》。</p>
+    <p class="meta">v2.0.0 · WPF / .NET Framework 4.8 · 2026-09-19</p>
+
+    <h2 id="intro">这是什么</h2>
+    <p>
+      程序通过 Windows <code>SetDeviceGammaRamp</code> 改写显示器的 256 级 RGB Gamma 曲线，
+      按当前画面自动计算目标曲线并平滑应用。不读取游戏进程内存、不注入 DLL、不创建覆盖层、不模拟键鼠输入。
+    </p>
+    <p>
+      界面语言是「战术终端」：深色底、琥珀色强调、等宽字体标注数值与状态。
+      所有数字读数都使用等宽字体，便于在调整过程中对比前后差异。
+    </p>
+
+    <h2 id="changelog">v2.0 的变化</h2>
+    <table>
+      <thead><tr><th>模块</th><th>v1.x</th><th>v2.0</th></tr></thead>
+      <tbody>
+        <tr><td>过渡引擎</td><td>固定 75ms 一步，短过渡只有 3~4 步，肉眼可见台阶</td><td>时间驱动，最少 10 步、单步不低于 16ms，配缓动</td></tr>
+        <tr><td>实时全自动</td><td>无</td><td>按间隔抓屏分析，三档灵敏度，EMA 自适应平滑</td></tr>
+        <tr><td>参数档案</td><td>原版与竞技场共用一套参数</td><td>两端各自独立存档，可跟随前台游戏自动切换</td></tr>
+        <tr><td>竞技场默认亮度</td><td>与原版一致</td><td>亮度微调默认 −3</td></tr>
+        <tr><td>版本号</td><td>顶栏 / 程序集 / 关于窗口三处不一致</td><td>统一为 2.0 / 2.0.0 / 2.0.0.0</td></tr>
+        <tr><td>名称</td><td>TarkovAutoShade</td><td>TarkovAutoShadePlus</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="color">色彩</h2>
+    <p>底色用近黑的墨绿灰，避免纯黑在长时间注视下的生硬感；琥珀色只用于强调与可操作元素。</p>
+    <div class="swatches">
+      <div class="swatch"><div class="chip" style="background:#0b0d0c"></div><div class="info"><b>CrtBlack</b>#0b0d0c · 窗口底色</div></div>
+      <div class="swatch"><div class="chip" style="background:#121614"></div><div class="info"><b>CrtSurface</b>#121614 · 面板与顶栏</div></div>
+      <div class="swatch"><div class="chip" style="background:#171b19"></div><div class="info"><b>Inset</b>#171b19 · 内嵌槽 / 输入框</div></div>
+      <div class="swatch"><div class="chip" style="background:#232926"></div><div class="info"><b>Border</b>#232926 · 分隔线</div></div>
+      <div class="swatch"><div class="chip" style="background:#313935"></div><div class="info"><b>BorderStrong</b>#313935 · 描边</div></div>
+      <div class="swatch"><div class="chip" style="background:#e6ece8"></div><div class="info"><b>PhosphorWhite</b>#e6ece8 · 主文字</div></div>
+      <div class="swatch"><div class="chip" style="background:#9aa79f"></div><div class="info"><b>PhosphorDim</b>#9aa79f · 次要文字</div></div>
+      <div class="swatch"><div class="chip" style="background:#6f7b74"></div><div class="info"><b>TextMuted</b>#6f7b74 · 标签</div></div>
+      <div class="swatch"><div class="chip" style="background:#f0a03c"></div><div class="info"><b>Amber</b>#f0a03c · 强调 / 激活</div></div>
+      <div class="swatch"><div class="chip" style="background:#4ade80"></div><div class="info"><b>TerminalGreen</b>#4ade80 · 运行中 / 成功</div></div>
+      <div class="swatch"><div class="chip" style="background:#ef4444"></div><div class="info"><b>HazardRed</b>#ef4444 · 危险 / 失败</div></div>
+    </div>
+
+    <h3>语义化用法</h3>
+    <table>
+      <thead><tr><th>状态</th><th>颜色</th><th>出现位置</th></tr></thead>
+      <tbody>
+        <tr><td>运行中</td><td>TerminalGreen</td><td>状态点、状态徽标、Toast 成功</td></tr>
+        <tr><td>已停止</td><td>TextMuted</td><td>状态点、状态徽标</td></tr>
+        <tr><td>警告</td><td>Amber</td><td>Toast 警告、需要注意的提示</td></tr>
+        <tr><td>失败</td><td>HazardRed</td><td>Toast 错误、危险按钮描边</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="type">字体</h2>
+    <table>
+      <thead><tr><th>角色</th><th>字体</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td>FontUi</td><td>Segoe UI / 微软雅黑</td><td>正文、标签、按钮</td></tr>
+        <tr><td>FontDisplay</td><td>Segoe UI Semibold / Bold</td><td>标题、品牌名、强调数字</td></tr>
+        <tr><td>FontMono</td><td>Consolas / Cascadia Mono</td><td>所有数值读数、路径、版本号、状态机文本</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      <b>为什么数值统一用等宽字体：</b>调参过程中用户会反复对比同一个读数的前后变化。
+      比例字体的数字宽度不一致，读数跳动时会产生视觉抖动，等宽可以消除这种干扰。
+    </div>
+
+    <h2 id="space">间距与圆角</h2>
+    <table>
+      <thead><tr><th>层级</th><th>值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>面板内边距</td><td>16 ~ 18px</td><td>统一，避免不同面板视觉重量不一</td></tr>
+        <tr><td>面板间距</td><td>12px</td><td>纵向堆叠间隔</td></tr>
+        <tr><td>控件间距</td><td>6 ~ 8px</td><td>标签与控件、控件与控件</td></tr>
+        <tr><td>圆角</td><td>6px 控件 / 8~10px 卡片</td><td>徽标与状态胶囊用全圆角</td></tr>
+        <tr><td>章节标题</td><td>3px × 14px 琥珀色竖条</td><td>位于标题左侧，作为分组标识</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="components">基础组件</h2>
+
+    <h3>按钮</h3>
+    <div class="demo">
+      <div class="demo-row">
+        <span class="btn primary">应用滤镜</span>
+        <span class="btn">刷新显示器</span>
+        <span class="btn sm">小按钮</span>
+      </div>
+    </div>
+    <p>主按钮用琥珀色渐变，仅在「开启 / 应用」这类正向动作上使用。次要按钮统一描边 + 深色底。</p>
+
+    <h3>状态徽标</h3>
+    <div class="demo">
+      <div class="demo-row">
+        <span class="pill on"><span class="dot"></span>滤镜运行中</span>
+        <span class="pill"><span class="dot"></span>未运行</span>
+        <span class="pill">当前预设 自动分析</span>
+        <span class="pill">F8</span>
+      </div>
+    </div>
+
+    <h3>参数滑杆</h3>
+    <div class="demo">
+      <div class="demo-row">
+        <div class="slider-demo">
+          <div class="lb"><span>暗部可见度</span><b>70</b></div>
+          <div class="track"><div class="fill" style="width:70%"></div><div class="knob" style="left:70%"></div></div>
+        </div>
+        <div class="slider-demo">
+          <div class="lb"><span>高光保护</span><b>76</b></div>
+          <div class="track"><div class="fill" style="width:76%"></div><div class="knob" style="left:76%"></div></div>
+        </div>
+      </div>
+      <div class="demo-row">
+        <div class="slider-demo">
+          <div class="lb"><span>亮度微调</span><b>−3</b></div>
+          <div class="track"><div class="fill" style="width:42.5%"></div><div class="knob" style="left:42.5%"></div></div>
+        </div>
+        <div class="slider-demo">
+          <div class="lb"><span>采样间隔</span><b>0.8s</b></div>
+          <div class="track"><div class="fill" style="width:8.3%"></div><div class="knob" style="left:8.3%"></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="note warn">
+      <b>实现提示：</b>数值滑杆必须开启整数吸附，否则拖动会产生小数而显示取整，读数与实际值不一致。
+    </div>
+
+    <h2 id="layout">三栏布局</h2>
+    <p>主窗口固定三栏：左侧设备与运行控制，中间预览与分析读数，右侧参数调节。最小尺寸 1060 × 700。</p>
+    <div class="wire">
+      <div class="wire-col">
+        <div class="wt">左栏 · 300px</div>
+        <div class="wire-box"><b>显示器模式</b>单屏 / 多屏、目标显示器</div>
+        <div class="wire-box"><b>截图目录</b>路径 + 选择目录</div>
+        <div class="wire-box"><b>运行控制</b>开关、立即分析、快捷键</div>
+        <div class="wire-box new"><b>实时全自动</b>开关 / 采样间隔 / 跟随灵敏度</div>
+        <div class="wire-box"><b>滤镜自动启停</b>前台进程监听</div>
+        <div class="wire-box"><b>显示器硬件</b>DDC/CI 亮度与对比度</div>
+      </div>
+      <div class="wire-col">
+        <div class="wt">中栏 · 自适应</div>
+        <div class="wire-box"><b>滤镜预览</b>拖动中线比较原图与滤镜效果</div>
+        <div class="wire-box"><b>画面读数</b>P10 / P50 / P95 / 动态范围</div>
+        <div class="wire-box"><b>底栏指标</b>等效 Gamma / 亮度调整 / 对比度调整</div>
+      </div>
+      <div class="wire-col">
+        <div class="wt">右栏 · 300px</div>
+        <div class="wire-box new"><b>参数档案</b>原版 / 竞技场、跟随前台切换</div>
+        <div class="wire-box"><b>快捷预设</b>6 套预设下拉</div>
+        <div class="wire-box"><b>自动算法偏好</b>7 个倾向参数</div>
+        <div class="wire-box"><b>画面微调</b>亮度 / 对比度 / 暖色 / 浓度</div>
+      </div>
+    </div>
+    <p>琥珀色边框的方框是 v2.0 新增的面板。</p>
+
+    <h2 id="motion">动效与过渡</h2>
+    <p>
+      Gamma 曲线切换不能在两帧之间跳变，否则会看到明显的闪一下。v2.0 把过渡改成时间驱动：
+    </p>
+    <pre><code>步数 = max(10, round(时长 / 基准间隔))     // 基准间隔 40ms
+单步间隔 = max(16, round(时长 / 步数))      // 不低于一帧
+进度 = 已耗时 / 总时长                      // Stopwatch，不依赖定时器计数
+缓动 = t * t * (3 - 2t)                    // SmoothStep</code></pre>
+    <p>过渡时长随曲线落差缩放：<code>260 + 落差 × 900</code> ms。落差越大，过渡越慢，避免大幅变化时仍然突兀。</p>
+    <div class="note">
+      <b>实时模式另有一层平滑：</b>画面特征先过 EMA，时间常数在 9.0s（抑制噪声）与 0.7s（快速跟随）之间按变化幅度插值。
+      夜视判定走未经平滑的原始帧，保证夜视保护不被平滑拖慢。
+    </div>
+
+    <h2 id="flow">分析到应用</h2>
+    <pre><code>画面来源：新截图（.png）| 定时抓屏 | 手动点「立即分析」
+    |
+    v
+缩放至约 320 × 180，取主体区域，规避 HUD 与窗口边缘
+    |
+    v
+提取 P10 / P50 / P75 / P95、动态范围、高亮占比、RGB 均值、边缘能量、夜视特征
+    |
+    v
+结合「当前生效的参数档案」计算推荐曲线
+    |
+    v
+生成 256 级 RGB Gamma Ramp
+    |
+    v
+平滑过渡到目标显示器（多屏模式下只作用于已勾选的显示器）</code></pre>
+    <p>
+      参数档案的选择：开启「跟随前台游戏自动切换」时，按前台进程名或截图路径中的 <code>Arena</code> 判定；
+      关闭时锁定在当前手动选中的档案。
+    </p>
+
+    <h2 id="limits">已知限制</h2>
+    <ul>
+      <li>Gamma Ramp 作用于目标显示器的整个 SDR 桌面，不只作用于游戏窗口。</li>
+      <li>HDR、独占全屏、显卡驱动或第三方色彩管理软件可能覆盖或忽略 Gamma Ramp。</li>
+      <li>截图监听只识别 <code>.png</code>。</li>
+      <li>显示器硬件亮度与对比度仅在单屏模式下检测到 DDC/CI 支持时可用。</li>
+      <li>关闭滤镜后程序仍监听截图目录，新截图会自动重新开启滤镜。</li>
+    </ul>
+
+    <footer>
+      <p>TarkovAutoShadePlus v2.0.0 · 免费分享，禁止倒卖</p>
+      <p>原作者：lub大萝卜　·　二改：a1175815821</p>
+      <p>仓库：<a href="https://github.com/a1175815821/TarkovAutoShadePlus">github.com/a1175815821/TarkovAutoShadePlus</a></p>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+(function () {
+  var links = [].slice.call(document.querySelectorAll('.side nav a'));
+  var targets = links.map(function (a) { return document.querySelector(a.getAttribute('href')); });
+
+  function onScroll() {
+    var idx = 0;
+    for (var i = 0; i < targets.length; i++) {
+      if (targets[i] && targets[i].getBoundingClientRect().top <= 120) idx = i;
+    }
+    links.forEach(function (a, i) { a.classList.toggle('active', i === idx); });
+  }
+
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
+</script>
+
+</body>
+</html>

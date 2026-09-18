@@ -3,7 +3,7 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     internal sealed class MonitorCapabilities
     {

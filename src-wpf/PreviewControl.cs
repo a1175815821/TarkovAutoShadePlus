@@ -14,7 +14,7 @@ using MediaColor = System.Windows.Media.Color;
 using MediaFontFamily = System.Windows.Media.FontFamily;
 using WpfPoint = System.Windows.Point;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     /// <summary>
     /// Same-image before/after comparison. The original and filtered images
@@ -68,7 +68,7 @@ namespace TarkovAutoShade
             divider = new Border
             {
                 Width = 4,
-                Background = new SolidColorBrush(MediaColor.FromRgb(82, 205, 158)),
+                Background = new SolidColorBrush(MediaColor.FromRgb(240, 160, 60)),
                 HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Stretch,
                 Cursor = Cursors.SizeWE
@@ -112,7 +112,7 @@ namespace TarkovAutoShade
                 FontFamily = new MediaFontFamily("Consolas"),
                 FontSize = 24,
                 FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush(MediaColor.FromRgb(82, 205, 158)),
+                Foreground = new SolidColorBrush(MediaColor.FromRgb(240, 160, 60)),
                 Width = 28,
                 Height = 28
             };
@@ -141,7 +141,7 @@ namespace TarkovAutoShade
             return new Border
             {
                 Background = new SolidColorBrush(MediaColor.FromArgb(210, 10, 10, 10)),
-                BorderBrush = new SolidColorBrush(MediaColor.FromRgb(82, 205, 158)),
+                BorderBrush = new SolidColorBrush(MediaColor.FromRgb(240, 160, 60)),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(8, 4, 8, 4),
                 Width = 52,
@@ -150,7 +150,7 @@ namespace TarkovAutoShade
                 Child = new TextBlock
                 {
                     Text = text,
-                    Foreground = new SolidColorBrush(MediaColor.FromRgb(82, 205, 158)),
+                    Foreground = new SolidColorBrush(MediaColor.FromRgb(240, 160, 60)),
                     FontFamily = new MediaFontFamily("Noto Sans SC, MiSans, Microsoft YaHei UI"),
                     FontSize = 11,
                     FontWeight = FontWeights.Bold,
@@ -166,8 +166,8 @@ namespace TarkovAutoShade
             {
                 Width = 34,
                 Height = 64,
-                Background = new SolidColorBrush(MediaColor.FromRgb(18, 18, 18)),
-                BorderBrush = new SolidColorBrush(MediaColor.FromRgb(82, 205, 158)),
+                Background = new SolidColorBrush(MediaColor.FromRgb(10, 14, 19)),
+                BorderBrush = new SolidColorBrush(MediaColor.FromRgb(240, 160, 60)),
                 BorderThickness = new Thickness(2),
                 VerticalAlignment = VerticalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -176,7 +176,7 @@ namespace TarkovAutoShade
             handle.Child = new TextBlock
             {
                 Text = "||",
-                Foreground = new SolidColorBrush(MediaColor.FromRgb(82, 205, 158)),
+                Foreground = new SolidColorBrush(MediaColor.FromRgb(240, 160, 60)),
                 FontFamily = new MediaFontFamily("Consolas"),
                 FontSize = 14,
                 FontWeight = FontWeights.Bold,
@@ -403,7 +403,7 @@ namespace TarkovAutoShade
                     new WpfPoint(plot.Right, plot.Top));
 
                 var curvePen = new Pen(new SolidColorBrush(
-                    MediaColor.FromRgb(82, 205, 158)), 2);
+                    MediaColor.FromRgb(240, 160, 60)), 2);
                 WpfPoint previous = new WpfPoint(plot.Left, plot.Bottom);
                 for (int i = 1; i < 256; i++)
                 {

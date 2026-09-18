@@ -6,7 +6,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 
-namespace TarkovAutoShade
+namespace TarkovAutoShadePlus
 {
     internal static class ImageAnalyzer
     {
@@ -16,6 +16,26 @@ namespace TarkovAutoShade
         public static AnalysisResult Analyze(string filePath, AppSettings settings)
         {
             using (Bitmap source = LoadStableBitmap(filePath))
+            {
+                AnalysisResult result = AnalyzeBitmap(source, settings, filePath);
+                try { result.CapturedAt = File.GetLastWriteTime(filePath); }
+                catch { }
+                return result;
+            }
+        }
+
+        public static AnalysisResult AnalyzeBitmap(Bitmap source, AppSettings settings, string sourceLabel)
+        {
+            AnalysisResult result = MeasureFrame(source, sourceLabel);
+            Complete(result, settings);
+            return result;
+        }
+
+        // 只做降采样和统计，不做分类与调光。实时路径需要在这两步之间
+        // 插入时间平滑，否则单帧噪声会被调光曲线的陡峭段放大。
+        public static AnalysisResult MeasureFrame(Bitmap source, string sourceLabel)
+        {
+            if (source == null) throw new ArgumentNullException("source");
             using (var sample = new Bitmap(
                 AnalysisWidth, AnalysisHeight, PixelFormat.Format24bppRgb))
             {
@@ -28,19 +48,25 @@ namespace TarkovAutoShade
                 }
 
                 var result = Measure(sample);
-                result.FilePath = filePath;
-                result.CapturedAt = File.GetLastWriteTime(filePath);
-                Classify(result);
-                if (result.IsUsable)
-                    result.Recommendation = ToneCurve.Recommend(result, settings);
+                result.FilePath = sourceLabel ?? "";
+                result.CapturedAt = DateTime.Now;
                 return result;
             }
+        }
+
+        // 对（可能被平滑过的）统计量做分类并生成调光建议。
+        public static void Complete(AnalysisResult result, AppSettings settings)
+        {
+            if (result == null) return;
+            Classify(result);
+            if (result.IsUsable)
+                result.Recommendation = ToneCurve.Recommend(result, settings);
         }
 
         public static Bitmap LoadStableBitmap(string filePath)
         {
             Exception lastError = null;
-            for (int attempt = 0; attempt < 16; attempt++)
+            for (int attempt = 0; attempt < 28; attempt++)
             {
                 try
                 {

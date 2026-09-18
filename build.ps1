@@ -1,16 +1,19 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $wpfProjectDir = Join-Path $projectDir "src-wpf"
 $outputDir = Join-Path $projectDir "bin-wpf"
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  TarkovAutoShade WPF Build Script" -ForegroundColor Cyan
+Write-Host "  TarkovAutoShadePlus WPF Build Script" -ForegroundColor Cyan
 Write-Host "  Using MSBuild" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 $msbuildPaths = @(
+    # 必须优先用 VS 的 Current\Bin：.NET Framework 4.0 自带的旧 MSBuild
+    # 编译器不支持本项目的 <LangVersion>latest</LangVersion>，会报 CS1617。
+    "D:\VSIDE\MSBuild\Current\Bin\MSBuild.exe",
     "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe",
     "C:\Program Files\Microsoft Visual Studio\2022\Professional\MSBuild\Current\Bin\MSBuild.exe",
     "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe",
@@ -54,7 +57,7 @@ try {
     Write-Host ""
     Write-Host "Build completed successfully!" -ForegroundColor Green
 
-    $exePath = Join-Path $outputDir "TarkovAutoShade.exe"
+    $exePath = Join-Path $outputDir "TarkovAutoShadePlus.exe"
     if (Test-Path $exePath) {
         Write-Host "  Output: $exePath" -ForegroundColor Cyan
         $fileInfo = Get-Item $exePath
