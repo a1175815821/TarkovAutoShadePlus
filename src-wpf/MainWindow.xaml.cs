@@ -59,6 +59,11 @@ namespace TarkovAutoShadePlus
         // 平铺字段始终镜像这份档案，所以既有的读写逻辑不用改。
         private int activeProfileKey = AppSettings.ProfileKeyEft;
         private bool switchingProfile;
+        // 手动点过档案按钮后，在前台游戏没换之前不要把选择盖回去。
+        // 否则「跟随游戏」开着时点一下按钮就会被立刻弹回，看起来像没保存。
+        private bool manualProfileOverride;
+        private int manualProfileOverrideKey;
+        private int manualProfileAnchorKey;
         private bool processWasDetected;
         private bool autoPausedByProcess;
         private bool processWatchUiInitialized;
@@ -1241,23 +1246,18 @@ namespace TarkovAutoShadePlus
         {
             ProfileEftButton.Click += delegate
             {
-                if (initializing) return;
-                // 手动点档案即视为锁定，否则下一次前台变化会立刻把它盖回去。
-                settings.ProfileFollowGame = false;
-                ProfileFollowGameCheckBox.IsChecked = false;
-                SwitchProfile(AppSettings.ProfileKeyEft);
+                SelectProfileManually(AppSettings.ProfileKeyEft);
             };
             ProfileArenaButton.Click += delegate
             {
-                if (initializing) return;
-                settings.ProfileFollowGame = false;
-                ProfileFollowGameCheckBox.IsChecked = false;
-                SwitchProfile(AppSettings.ProfileKeyArena);
+                SelectProfileManually(AppSettings.ProfileKeyArena);
             };
             ProfileFollowGameCheckBox.Checked += delegate
             {
                 if (initializing || switchingProfile) return;
                 settings.ProfileFollowGame = true;
+                // 重新交给自动，之前那次手动选择不再算数。
+                manualProfileOverride = false;
                 SyncProfileToForeground();
                 SaveSettings();
             };
@@ -1269,14 +1269,45 @@ namespace TarkovAutoShadePlus
             };
         }
 
+        // GetActiveWatchedProcessName 走 Win32 GetForegroundWindow，只能 UI 线程调。
+        private int ResolveForegroundGameKey()
+        {
+            string foreground = GetActiveWatchedProcessName();
+            if (string.IsNullOrWhiteSpace(foreground)) return activeProfileKey;
+            return AppSettings.ResolveGameKey(foreground);
+        }
+
+        // 手动选档案只决定「现在编辑哪一份」，不再顺手关掉跟随。
+        // 以前点按钮会强制 ProfileFollowGame = false，用户勾好的跟随就这样没了。
+        private void SelectProfileManually(int key)
+        {
+            if (initializing) return;
+            if (settings.ProfileFollowGame)
+            {
+                manualProfileOverride = true;
+                manualProfileOverrideKey = key;
+                manualProfileAnchorKey = ResolveForegroundGameKey();
+            }
+            SwitchProfile(key);
+            SaveSettings();
+        }
+
         private int ResolveDesiredProfileKey()
         {
             if (!settings.ProfileFollowGame) return settings.LockedProfileKey;
-            // GetActiveWatchedProcessName 走 Win32 GetForegroundWindow，只能 UI 线程调。
             string foreground = GetActiveWatchedProcessName();
             // 没有游戏在前台时保持现状，避免刚切出去就被打回原版。
             if (string.IsNullOrWhiteSpace(foreground)) return activeProfileKey;
-            return AppSettings.ResolveGameKey(foreground);
+            int foregroundKey = AppSettings.ResolveGameKey(foreground);
+            if (manualProfileOverride)
+            {
+                // 前台还是同一个游戏，尊重刚才那次手动选择。
+                if (foregroundKey == manualProfileAnchorKey)
+                    return manualProfileOverrideKey;
+                // 前台已经换游戏了，交回自动。
+                manualProfileOverride = false;
+            }
+            return foregroundKey;
         }
 
         private void SyncProfileToForeground()
@@ -1322,9 +1353,12 @@ namespace TarkovAutoShadePlus
             try
             {
                 bool eft = activeProfileKey == AppSettings.ProfileKeyEft;
+                string suffix;
+                if (!settings.ProfileFollowGame) suffix = "（已锁定）";
+                else if (manualProfileOverride) suffix = "（跟随游戏·手动选择）";
+                else suffix = "（跟随游戏）";
                 ProfileStatusText.Text = "当前生效：" +
-                    AppSettings.GetProfileLabel(activeProfileKey) +
-                    (settings.ProfileFollowGame ? "（跟随游戏）" : "（已锁定）");
+                    AppSettings.GetProfileLabel(activeProfileKey) + suffix;
                 Brush active = (Brush)FindResource("AmberAlertBrush");
                 Brush idleBorder = (Brush)FindResource("BorderStrongBrush");
                 Brush idleText = (Brush)FindResource("PhosphorDimBrush");
@@ -1941,7 +1975,12 @@ namespace TarkovAutoShadePlus
                 {
                     if (closing || !settings.AutoWatch) return;
                     // 截图来自哪个游戏的目录，就用哪一套参数来分析。
-                    SwitchProfile(AppSettings.ResolveGameKey(filePath));
+                    // 锁定时不再跟着截图切档，否则「锁定」形同虚设。
+                    if (settings.ProfileFollowGame)
+                    {
+                        manualProfileOverride = false;
+                        SwitchProfile(AppSettings.ResolveGameKey(filePath));
+                    }
                     AnalyzePath(filePath, true);
                 }));
             }
