@@ -1,5 +1,6 @@
 # Build output and compiler caches
 /src-wpf/obj/
+/src-wpf/bin/
 /bin-wpf/
 
 # Local test output

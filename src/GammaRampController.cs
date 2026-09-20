@@ -474,6 +474,8 @@ namespace TarkovAutoShadePlus
                 {
                     error = "读取系统 Gamma 失败（错误 " +
                         Marshal.GetLastWin32Error().ToString() + "）。";
+                    Diagnostics.Throttled("Gamma", "get-fail:" + deviceName,
+                        deviceName + " " + error, TimeSpan.FromSeconds(10));
                     return false;
                 }
                 ramp = value;
@@ -493,6 +495,8 @@ namespace TarkovAutoShadePlus
             if (dc == IntPtr.Zero)
             {
                 error = "无法访问显示器：" + deviceName;
+                Diagnostics.Throttled("Gamma", "dc-fail:" + deviceName,
+                    error + "（该显示器可能已断开或刚换过驱动）", TimeSpan.FromSeconds(10));
                 return false;
             }
             try
@@ -501,6 +505,8 @@ namespace TarkovAutoShadePlus
                 if (!SetDeviceGammaRamp(dc, ref copy))
                 {
                     error = "应用 Gamma 曲线失败。请关闭 HDR，并检查显卡色彩设置。";
+                    Diagnostics.Throttled("Gamma", "set-fail:" + deviceName,
+                        deviceName + " " + error, TimeSpan.FromSeconds(5));
                     return false;
                 }
                 return true;

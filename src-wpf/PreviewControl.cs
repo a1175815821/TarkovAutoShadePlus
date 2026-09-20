@@ -314,17 +314,6 @@ namespace TarkovAutoShadePlus
             graph.SetAnalysis(null);
         }
 
-        private static BitmapImage LoadBitmapImage(string filePath)
-        {
-            var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.UriSource = new Uri(filePath, UriKind.Absolute);
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.EndInit();
-            bitmap.Freeze();
-            return bitmap;
-        }
-
         private static BitmapImage ConvertBitmapToImageSource(DrawingBitmap bitmap)
         {
             using (var memory = new MemoryStream())

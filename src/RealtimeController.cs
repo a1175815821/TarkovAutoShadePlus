@@ -36,6 +36,9 @@ namespace TarkovAutoShadePlus
         private const double EmaSlowTauSeconds = 9.0;
         private const double EmaFastTauSeconds = 0.7;
 
+        // 关闭 / 未启用状态下的空转节拍，与 Run 里的默认值一致。
+        private const int IdlePollMilliseconds = 1200;
+
         private AnalysisResult lastApplied;
         private AnalysisResult lastAppliedRaw;
         private AnalysisResult smoothedScene;
@@ -52,6 +55,10 @@ namespace TarkovAutoShadePlus
 
         public Func<AppSettings> AcquireSettings;
         public Func<List<string>> AcquireTargets;
+        // 不碰任何 WPF 控件的「实时有没有开」判断。抓屏参数与目标显示器都要
+        // 跨线程取，所以关闭状态下必须先用它挡一道，否则每秒都为一份用不上的
+        // 设置做一次 UI 线程往返。
+        public Func<bool> IsRealtimeEnabled;
         public Func<bool> IsGameForeground;
         public Func<bool> IsManualFilterOn;
         public Func<bool> IsClosing;
@@ -87,7 +94,15 @@ namespace TarkovAutoShadePlus
                 {
                     sleepMs = Tick(token);
                 }
-                catch { sleepMs = 1200; }
+                catch (Exception error)
+                {
+                    sleepMs = 1200;
+                    // 原先这里什么都不留。有一条跨线程访问 UI 的 InvalidOperationException
+                    // 就是这样被静默吃掉：界面上一直写着「采样中」，实际一帧都没调。
+                    Diagnostics.Throttled("实时", "tick-error",
+                        "采样循环异常：" + error.GetType().Name + " " + error.Message,
+                        TimeSpan.FromSeconds(10));
+                }
                 if (token.IsCancellationRequested) break;
                 try
                 {
@@ -105,16 +120,29 @@ namespace TarkovAutoShadePlus
 
         private int Tick(CancellationToken token)
         {
+            // 「正在关闭」和「实时没开」都在跨线程取参数之前判掉：AcquireSettings
+            // 要走 UI 线程，关闭途中再去排队只会让退出卡住。
+            try
+            {
+                if (IsClosing != null && IsClosing()) return IdlePollMilliseconds;
+            }
+            catch { }
+            try
+            {
+                if (IsRealtimeEnabled != null && !IsRealtimeEnabled())
+                {
+                    ResetSceneState();
+                    SetStatus("未启用");
+                    return IdlePollMilliseconds;
+                }
+            }
+            catch { }
+
             Func<AppSettings> acquireSettings = AcquireSettings;
             AppSettings settings = acquireSettings == null ? null : acquireSettings();
             if (settings == null) settings = AppSettings.CreateDefault();
             int interval = MathUtil.Clamp(settings.RealtimeIntervalMs, 600, 3000);
 
-            if (IsClosing != null)
-            {
-                try { if (IsClosing()) return interval; }
-                catch { }
-            }
             if (!settings.RealtimeEnabled)
             {
                 ResetSceneState();
@@ -425,6 +453,7 @@ namespace TarkovAutoShadePlus
             }
             Action<string> handler = StatusChanged;
             if (handler == null) return;
+            Diagnostics.Info("实时", "状态转为「" + status + "」");
             try { handler(status); }
             catch { }
         }
@@ -441,6 +470,7 @@ namespace TarkovAutoShadePlus
             }
             Action<string> handler = Faulted;
             if (handler == null) return;
+            Diagnostics.Warn("实时", message);
             try { handler(message); }
             catch { }
         }

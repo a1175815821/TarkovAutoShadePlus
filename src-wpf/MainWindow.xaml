@@ -1,4 +1,4 @@
-<Window x:Class="TarkovAutoShadePlus.MainWindow"
+﻿<Window x:Class="TarkovAutoShadePlus.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="TarkovAutoShadePlus"
@@ -47,7 +47,7 @@
                                VerticalAlignment="Center" Margin="12,0,8,0"/>
                     <Border Background="{StaticResource AmberFaintBrush}" BorderBrush="{StaticResource AmberAlertBrush}"
                             BorderThickness="1" CornerRadius="9" Padding="7,2" VerticalAlignment="Center">
-                        <TextBlock Text="v2.0" FontFamily="{StaticResource FontMono}" FontSize="10"
+                        <TextBlock Text="v2.2" FontFamily="{StaticResource FontMono}" FontSize="10"
                                    FontWeight="Bold" Foreground="{StaticResource AmberAlertBrush}"/>
                     </Border>
                 </StackPanel>
@@ -76,6 +76,44 @@
                     </Border>
                 </StackPanel>
 
+                <!-- 运行态与异常计数。放在 * 列里右对齐：窗口窄到放不下时被裁掉的是
+                     这一条，而不是把右侧按钮挤出窗口。 -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal"
+                            HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Border Background="{StaticResource InsetBrush}" BorderBrush="{StaticResource CrtBorderBrush}"
+                            BorderThickness="1" CornerRadius="13" Padding="11,5">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="监听" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock x:Name="WatcherStateText" Text="未监听" FontSize="12" FontWeight="SemiBold"
+                                       FontFamily="{StaticResource FontMono}"
+                                       Foreground="{StaticResource HazardRedBrush}"
+                                       VerticalAlignment="Center" Margin="6,0,10,0"/>
+                            <Border Width="1" Height="12" Background="{StaticResource CrtBorderBrush}" Margin="0,2"/>
+                            <TextBlock Text="实时" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       VerticalAlignment="Center" Margin="10,0,0,0"/>
+                            <TextBlock x:Name="RealtimeStateText" Text="未启用" FontSize="12" FontWeight="SemiBold"
+                                       FontFamily="{StaticResource FontMono}"
+                                       Foreground="{StaticResource PhosphorDimBrush}"
+                                       VerticalAlignment="Center" Margin="6,0,0,0"/>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="FaultPill" Background="{StaticResource InsetBrush}"
+                            BorderBrush="{StaticResource AmberAlertBrush}" BorderThickness="1"
+                            CornerRadius="13" Padding="11,5" Margin="8,0,0,0"
+                            Cursor="Hand" Visibility="Collapsed"
+                            ToolTip="有提醒或报错发生过，点击查看诊断信息与最近日志">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse x:Name="FaultPillDot" Width="7" Height="7"
+                                     Fill="{StaticResource AmberAlertBrush}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="FaultPillText" Text="提醒 1" FontSize="12" FontWeight="SemiBold"
+                                       FontFamily="{StaticResource FontMono}"
+                                       Foreground="{StaticResource AmberAlertBrush}"
+                                       VerticalAlignment="Center" Margin="7,0,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
                 <!-- 操作通知（代码后置控制） -->
                 <Border x:Name="ActionMessagePanel" Grid.Column="3"
                         Background="{StaticResource InsetBrush}" BorderBrush="{StaticResource BorderStrongBrush}"
@@ -90,13 +128,20 @@
                                    VerticalAlignment="Center" Margin="7,0,0,0"/>
                         <TextBlock x:Name="ActionMessageText" Text="" FontSize="11.5"
                                    Foreground="{StaticResource PhosphorWhiteBrush}"
+                                   MaxWidth="360" TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center" Margin="6,0,0,0"/>
                     </StackPanel>
                 </Border>
 
-                <Button x:Name="AboutButton" Grid.Column="4" Content="关于"
-                        Style="{StaticResource TacticalButton}" Height="30" Padding="14,0"
-                        VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="DiagnosticsButton" Content="诊断"
+                            Style="{StaticResource TacticalButton}" Height="30" Padding="14,0"
+                            Margin="0,0,8,0"
+                            ToolTip="导出诊断信息与最近日志。报障时直接把这份内容贴出来。"/>
+                    <Button x:Name="AboutButton" Content="关于"
+                            Style="{StaticResource TacticalButton}" Height="30" Padding="14,0"
+                            VerticalAlignment="Center"/>
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -113,70 +158,6 @@
             <!-- ========== 左列：设备与运行 ========== -->
             <ScrollViewer Grid.Column="0" Style="{StaticResource PanelScrollViewer}">
                 <StackPanel Margin="0,0,6,0">
-
-                    <!-- 显示器模式 -->
-                    <Border Style="{StaticResource TacticalPanel}" Margin="0,0,0,12">
-                        <StackPanel>
-                            <Grid Margin="0,0,0,12">
-                                <StackPanel Orientation="Horizontal">
-                                    <Border Width="3" Height="14" CornerRadius="1.5" Background="{StaticResource AmberAlertBrush}"
-                                            VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                    <TextBlock Text="显示器模式" Style="{StaticResource SectionHeader}"/>
-                                </StackPanel>
-                                <Button x:Name="RefreshDisplayButton" Content="刷新显示器"
-                                        Style="{StaticResource TacticalButton}" Height="26" Padding="10,0"
-                                        FontSize="11" HorizontalAlignment="Right"/>
-                            </Grid>
-
-                            <ComboBox x:Name="DisplayModeComboBox" Style="{StaticResource TacticalComboBox}"
-                                      SelectedIndex="0" Margin="0,0,0,12">
-                                <ComboBoxItem Content="单屏模式"/>
-                                <ComboBoxItem Content="多屏模式"/>
-                            </ComboBox>
-
-                            <Border x:Name="SingleDisplayPanel" BorderThickness="0" Padding="0">
-                                <StackPanel>
-                                    <TextBlock Text="目标显示器" Style="{StaticResource PanelHint}" Margin="0,0,0,6"/>
-                                    <ComboBox x:Name="DisplayComboBox" Style="{StaticResource TacticalComboBox}"/>
-                                </StackPanel>
-                            </Border>
-                            <Border x:Name="MultiDisplayPanel" BorderThickness="0" Padding="0" Visibility="Collapsed">
-                                <StackPanel>
-                                    <TextBlock Text="应用显示器（可多选，至少勾选一个）" Style="{StaticResource PanelHint}" Margin="0,0,0,6"/>
-                                    <StackPanel x:Name="DisplaySelectionPanel"/>
-                                    <TextBlock Text="同一套滤镜会同步应用到勾选的显示器。" Style="{StaticResource PanelHint}" Margin="0,8,0,0"/>
-                                </StackPanel>
-                            </Border>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- 截图目录 -->
-                    <Border Style="{StaticResource TacticalPanel}" Margin="0,0,0,12">
-                        <StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                                <Border Width="3" Height="14" CornerRadius="1.5" Background="{StaticResource AmberAlertBrush}"
-                                        VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBlock Text="截图目录" Style="{StaticResource SectionHeader}"/>
-                            </StackPanel>
-                            <TextBlock x:Name="FolderPath" Text="未找到截图目录"
-                                       FontFamily="{StaticResource FontMono}" FontSize="11"
-                                       Foreground="{StaticResource AmberAlertBrush}"
-                                       TextTrimming="CharacterEllipsis" Margin="0,0,0,8"/>
-                            <StackPanel x:Name="FolderSelectionPanel" Margin="0,0,0,10"/>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="8"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <Button x:Name="BrowseFolderButton" Grid.Column="0" Content="选择目录"
-                                        Style="{StaticResource TacticalButtonPrimary}"/>
-                                <Button x:Name="ResetFolderButton" Grid.Column="2" Content="重新发现"
-                                        Style="{StaticResource TacticalButton}" Padding="12,0"/>
-                            </Grid>
-                            <TextBlock Text="自动发现原版 / 竞技场截图目录并同时监听；点击路径可添加目录。" Style="{StaticResource PanelHint}" Margin="0,10,0,0"/>
-                        </StackPanel>
-                    </Border>
 
                     <!-- 运行控制 -->
                     <Border Style="{StaticResource TacticalPanel}" Margin="0,0,0,12">
@@ -253,33 +234,8 @@
                                 <ComboBoxItem Content="均衡"/>
                                 <ComboBoxItem Content="灵敏"/>
                             </ComboBox>
-                            <TextBlock Text="仅 SDR / 无边框窗口有效，独占全屏与 HDR 下 Gamma 会被系统忽略；切出游戏自动暂停。"
+                            <TextBlock Text="仅 SDR / 无边框窗口有效，独占全屏与 HDR 下 Gamma 会被系统忽略；勾选「切出游戏时自动关闭滤镜」后，切出游戏会一并暂停实时检测。"
                                        Style="{StaticResource PanelHint}" Margin="0,8,0,0"/>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- 滤镜自动启停 -->
-                    <Border x:Name="ProcessWatchPanel" Style="{StaticResource TacticalPanel}" Margin="0,0,0,12">
-                        <StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                                <Border Width="3" Height="14" CornerRadius="1.5" Background="{StaticResource AmberAlertBrush}"
-                                        VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBlock Text="滤镜自动启停" Style="{StaticResource SectionHeader}"/>
-                            </StackPanel>
-                            <CheckBox x:Name="ProcessWatchCheckBox" Content="切出游戏时自动关闭滤镜"
-                                      Style="{StaticResource TacticalCheckBox}" Margin="0,0,0,10"/>
-                            <StackPanel x:Name="ProcessWatchControls">
-                                <Grid Margin="0,0,0,8">
-                                    <TextBlock Text="前台状态" Style="{StaticResource PanelHint}"/>
-                                    <TextBlock x:Name="ProcessWatchStatusText" Text="未启用"
-                                               FontFamily="{StaticResource FontMono}" FontSize="11"
-                                               Foreground="{StaticResource PhosphorDimBrush}"
-                                               HorizontalAlignment="Right"/>
-                                </Grid>
-                                <StackPanel x:Name="ProcessSelectionPanel" Margin="0,0,0,8"/>
-                                <TextBlock Text="从运行中的进程添加" Style="{StaticResource PanelHint}" Margin="0,0,0,6"/>
-                                <ComboBox x:Name="ProcessComboBox" Style="{StaticResource TacticalComboBox}"/>
-                            </StackPanel>
                         </StackPanel>
                     </Border>
 
@@ -310,6 +266,94 @@
                         </StackPanel>
                     </Border>
 
+                    <!-- 滤镜自动启停 -->
+                    <Border x:Name="ProcessWatchPanel" Style="{StaticResource TacticalPanel}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <Border Width="3" Height="14" CornerRadius="1.5" Background="{StaticResource AmberAlertBrush}"
+                                        VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="滤镜自动启停" Style="{StaticResource SectionHeader}"/>
+                            </StackPanel>
+                            <CheckBox x:Name="ProcessWatchCheckBox" Content="切出游戏时自动关闭滤镜"
+                                      Style="{StaticResource TacticalCheckBox}" Margin="0,0,0,10"/>
+                            <StackPanel x:Name="ProcessWatchControls">
+                                <Grid Margin="0,0,0,8">
+                                    <TextBlock Text="前台状态" Style="{StaticResource PanelHint}"/>
+                                    <TextBlock x:Name="ProcessWatchStatusText" Text="未启用"
+                                               FontFamily="{StaticResource FontMono}" FontSize="11"
+                                               Foreground="{StaticResource PhosphorDimBrush}"
+                                               HorizontalAlignment="Right"/>
+                                </Grid>
+                                <StackPanel x:Name="ProcessSelectionPanel" Margin="0,0,0,8"/>
+                                <TextBlock Text="从运行中的进程添加" Style="{StaticResource PanelHint}" Margin="0,0,0,6"/>
+                                <ComboBox x:Name="ProcessComboBox" Style="{StaticResource TacticalComboBox}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 截图目录 -->
+                    <Border Style="{StaticResource TacticalPanel}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <Border Width="3" Height="14" CornerRadius="1.5" Background="{StaticResource AmberAlertBrush}"
+                                        VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="截图目录" Style="{StaticResource SectionHeader}"/>
+                            </StackPanel>
+                            <TextBlock x:Name="FolderPath" Text="未找到截图目录"
+                                       FontFamily="{StaticResource FontMono}" FontSize="11"
+                                       Foreground="{StaticResource AmberAlertBrush}"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,0,8"/>
+                            <StackPanel x:Name="FolderSelectionPanel" Margin="0,0,0,10"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="8"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="BrowseFolderButton" Grid.Column="0" Content="选择目录"
+                                        Style="{StaticResource TacticalButtonPrimary}"/>
+                                <Button x:Name="ResetFolderButton" Grid.Column="2" Content="重新发现"
+                                        Style="{StaticResource TacticalButton}" Padding="12,0"/>
+                            </Grid>
+                            <TextBlock Text="自动发现原版 / 竞技场截图目录并同时监听；点击路径可添加目录。" Style="{StaticResource PanelHint}" Margin="0,10,0,0"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 显示器模式 -->
+                    <Border Style="{StaticResource TacticalPanel}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,12">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="3" Height="14" CornerRadius="1.5" Background="{StaticResource AmberAlertBrush}"
+                                            VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="显示器模式" Style="{StaticResource SectionHeader}"/>
+                                </StackPanel>
+                                <Button x:Name="RefreshDisplayButton" Content="刷新显示器"
+                                        Style="{StaticResource TacticalButton}" Height="26" Padding="10,0"
+                                        FontSize="11" HorizontalAlignment="Right"/>
+                            </Grid>
+
+                            <ComboBox x:Name="DisplayModeComboBox" Style="{StaticResource TacticalComboBox}"
+                                      SelectedIndex="0" Margin="0,0,0,12">
+                                <ComboBoxItem Content="单屏模式"/>
+                                <ComboBoxItem Content="多屏模式"/>
+                            </ComboBox>
+
+                            <Border x:Name="SingleDisplayPanel" BorderThickness="0" Padding="0">
+                                <StackPanel>
+                                    <TextBlock Text="目标显示器" Style="{StaticResource PanelHint}" Margin="0,0,0,6"/>
+                                    <ComboBox x:Name="DisplayComboBox" Style="{StaticResource TacticalComboBox}"/>
+                                </StackPanel>
+                            </Border>
+                            <Border x:Name="MultiDisplayPanel" BorderThickness="0" Padding="0" Visibility="Collapsed">
+                                <StackPanel>
+                                    <TextBlock Text="应用显示器（可多选，至少勾选一个）" Style="{StaticResource PanelHint}" Margin="0,0,0,6"/>
+                                    <StackPanel x:Name="DisplaySelectionPanel"/>
+                                    <TextBlock Text="同一套滤镜会同步应用到勾选的显示器。" Style="{StaticResource PanelHint}" Margin="0,8,0,0"/>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
 
@@ -380,7 +424,8 @@
                                         <Border Background="{StaticResource AmberFaintBrush}"
                                                 BorderBrush="{StaticResource AmberAlertBrush}" BorderThickness="1"
                                                 CornerRadius="11" Padding="12,4" HorizontalAlignment="Center">
-                                            <TextBlock Text="状态：监听中" FontFamily="{StaticResource FontMono}"
+                                            <TextBlock x:Name="WatcherBadgeText" Text="状态：监听中"
+                                                       FontFamily="{StaticResource FontMono}"
                                                        FontSize="10.5" FontWeight="Bold"
                                                        Foreground="{StaticResource AmberAlertBrush}"/>
                                         </Border>
@@ -649,6 +694,193 @@
                                 </Grid>
                                 <Slider x:Name="SaturationSlider" Style="{StaticResource TacticalSlider}"
                                         Minimum="-20" Maximum="20" Value="0"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 色彩聚焦 -->
+                    <Border Style="{StaticResource TacticalPanel}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,4">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="3" Height="14" CornerRadius="1.5" Background="{StaticResource AmberAlertBrush}"
+                                            VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="色彩聚焦" Style="{StaticResource SectionHeader}"/>
+                                </StackPanel>
+                                <CheckBox x:Name="FocusEnabledCheckBox" Content="启用"
+                                          Style="{StaticResource TacticalCheckBox}"
+                                          HorizontalAlignment="Right" VerticalAlignment="Center"
+                                          ToolTip="关掉后保留下面所有数值但不参与计算，方便在「有 / 无」之间来回对比。"/>
+                            </Grid>
+                            <TextBlock Text="增强选定的色相，同时把其余色相压回一点；再可手动分通道调色。"
+                                       Style="{StaticResource PanelHint}" Margin="0,0,0,14"/>
+
+                            <StackPanel x:Name="FocusControlsPanel">
+                            <!-- 目标色调 -->
+                            <StackPanel Margin="0,0,0,16">
+                                <Grid Margin="0,0,0,6">
+                                    <TextBlock Text="目标色调" Style="{StaticResource ParamLabel}"
+                                               ToolTip="要增强的色相。25° 暖橙偏火光、木料与皮肤，110° 绿偏植被，195° 青偏冷光与水面。"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <Border x:Name="FocusHueSwatch" Width="15" Height="15" CornerRadius="3"
+                                                Background="#FFA85C10"
+                                                BorderBrush="{StaticResource BorderStrongBrush}" BorderThickness="1"
+                                                VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBlock x:Name="FocusHueValue" Text="25°" Style="{StaticResource ParamValue}"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Border Height="6" CornerRadius="3" Margin="0,0,0,5" BorderThickness="1"
+                                        BorderBrush="{StaticResource CrtBorderBrush}">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                            <GradientStop Color="#FFFF3B30" Offset="0"/>
+                                            <GradientStop Color="#FFFFCC00" Offset="0.1667"/>
+                                            <GradientStop Color="#FF34C759" Offset="0.3333"/>
+                                            <GradientStop Color="#FF32ADE6" Offset="0.5"/>
+                                            <GradientStop Color="#FF3B5BFF" Offset="0.6667"/>
+                                            <GradientStop Color="#FFAF52DE" Offset="0.8333"/>
+                                            <GradientStop Color="#FFFF3B30" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                </Border>
+                                <Slider x:Name="FocusHueSlider" Style="{StaticResource TacticalSlider}"
+                                        Minimum="0" Maximum="359" Value="25"
+                                        TickFrequency="1" IsSnapToTickEnabled="True" Margin="0,0,0,8"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="6"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="6"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="6"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="FocusHueEmberButton" Grid.Column="0" Content="火光橙"
+                                            Style="{StaticResource TacticalButton}" Height="26" Padding="0" FontSize="11"/>
+                                    <Button x:Name="FocusHueBloodButton" Grid.Column="2" Content="血迹红"
+                                            Style="{StaticResource TacticalButton}" Height="26" Padding="0" FontSize="11"/>
+                                    <Button x:Name="FocusHueFoliageButton" Grid.Column="4" Content="植被绿"
+                                            Style="{StaticResource TacticalButton}" Height="26" Padding="0" FontSize="11"/>
+                                    <Button x:Name="FocusHueCyanButton" Grid.Column="6" Content="霓虹青"
+                                            Style="{StaticResource TacticalButton}" Height="26" Padding="0" FontSize="11"/>
+                                </Grid>
+                            </StackPanel>
+
+                            <!-- 聚焦强度 -->
+                            <StackPanel Margin="0,0,0,16">
+                                <Grid Margin="0,0,0,6">
+                                    <TextBlock Text="聚焦强度" Style="{StaticResource ParamLabel}"
+                                               ToolTip="越大，目标色相的通道被推得越高、其余通道被压得越低。0 为关闭。"/>
+                                    <TextBlock x:Name="FocusStrengthValue" Text="0" Style="{StaticResource ParamValue}"/>
+                                </Grid>
+                                <Slider x:Name="FocusStrengthSlider" Style="{StaticResource TacticalSlider}"
+                                        Minimum="0" Maximum="100" Value="0"
+                                        TickFrequency="1" IsSnapToTickEnabled="True"/>
+                            </StackPanel>
+
+                            <!-- 作用亮度 -->
+                            <StackPanel Margin="0,0,0,16">
+                                <Grid Margin="0,0,0,6">
+                                    <TextBlock Text="作用亮度" Style="{StaticResource ParamLabel}"
+                                               ToolTip="聚焦作用在画面的哪一段亮度。负值偏暗部（角落与暗处），正值偏亮部（灯光与高光），0 为中间调。"/>
+                                    <TextBlock x:Name="FocusRangeValue" Text="0" Style="{StaticResource ParamValue}"/>
+                                </Grid>
+                                <Slider x:Name="FocusRangeSlider" Style="{StaticResource TacticalSlider}"
+                                        Minimum="-20" Maximum="20" Value="0"
+                                        TickFrequency="1" IsSnapToTickEnabled="True"/>
+                            </StackPanel>
+
+                            <!-- 手动调色 -->
+                            <StackPanel>
+                                <Grid Margin="0,0,0,4">
+                                    <TextBlock Text="手动调色" Style="{StaticResource ParamLabel}"/>
+                                </Grid>
+                                <TextBlock Text="按通道直接偏移，和上面的目标色调叠加；0 为不调整。"
+                                           Style="{StaticResource PanelHint}" Margin="0,0,0,12"/>
+
+                                <Grid Margin="0,0,0,6">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Width="3" Height="11" CornerRadius="1.5" Background="#FFE2564A"
+                                                VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBlock Text="红" Style="{StaticResource ParamLabel}"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="TrimRedValue" Text="+0" Style="{StaticResource ParamValue}"/>
+                                </Grid>
+                                <Slider x:Name="TrimRedSlider" Style="{StaticResource TacticalSlider}"
+                                        Minimum="-20" Maximum="20" Value="0"
+                                        TickFrequency="1" IsSnapToTickEnabled="True" Margin="0,0,0,12"/>
+
+                                <Grid Margin="0,0,0,6">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Width="3" Height="11" CornerRadius="1.5" Background="#FF4FBF6A"
+                                                VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBlock Text="绿" Style="{StaticResource ParamLabel}"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="TrimGreenValue" Text="+0" Style="{StaticResource ParamValue}"/>
+                                </Grid>
+                                <Slider x:Name="TrimGreenSlider" Style="{StaticResource TacticalSlider}"
+                                        Minimum="-20" Maximum="20" Value="0"
+                                        TickFrequency="1" IsSnapToTickEnabled="True" Margin="0,0,0,12"/>
+
+                                <Grid Margin="0,0,0,6">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Border Width="3" Height="11" CornerRadius="1.5" Background="#FF4A87E2"
+                                                VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBlock Text="蓝" Style="{StaticResource ParamLabel}"/>
+                                    </StackPanel>
+                                    <TextBlock x:Name="TrimBlueValue" Text="+0" Style="{StaticResource ParamValue}"/>
+                                </Grid>
+                                <Slider x:Name="TrimBlueSlider" Style="{StaticResource TacticalSlider}"
+                                        Minimum="-20" Maximum="20" Value="0"
+                                        TickFrequency="1" IsSnapToTickEnabled="True"/>
+                            </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 臂环增强 -->
+                    <Border Style="{StaticResource TacticalPanel}" Margin="0,0,0,12">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,4">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="3" Height="14" CornerRadius="1.5" Background="{StaticResource AmberAlertBrush}"
+                                            VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <TextBlock Text="臂环增强" Style="{StaticResource SectionHeader}"/>
+                                </StackPanel>
+                                <CheckBox x:Name="ArmbandEnabledCheckBox" Content="启用"
+                                          Style="{StaticResource TacticalCheckBox}"
+                                          HorizontalAlignment="Right" VerticalAlignment="Center"
+                                          ToolTip="红色 / 蓝色臂环的定向增强。默认关闭。"/>
+                            </Grid>
+                            <TextBlock Text="针对红色与蓝色臂环：把红蓝的饱和区提亮提艳，并把植被、橄榄色的绿分量压掉。"
+                                       Style="{StaticResource PanelHint}" Margin="0,0,0,14"/>
+
+                            <StackPanel x:Name="ArmbandControlsPanel">
+                                <StackPanel Margin="0,0,0,16">
+                                    <Grid Margin="0,0,0,6">
+                                        <TextBlock Text="双色强化" Style="{StaticResource ParamLabel}"
+                                                   ToolTip="抬升红、蓝通道的饱和区（权重 v²，中性灰所在的中间调只有 0.25，几乎不动）。红蓝臂环会更亮更艳；亮部中性色如白色护甲会轻微偏品红。"/>
+                                        <TextBlock x:Name="ArmbandLiftValue" Text="0" Style="{StaticResource ParamValue}"/>
+                                    </Grid>
+                                    <Slider x:Name="ArmbandLiftSlider" Style="{StaticResource TacticalSlider}"
+                                            Minimum="0" Maximum="100" Value="0"
+                                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                                </StackPanel>
+
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,6">
+                                        <TextBlock Text="环境去色" Style="{StaticResource ParamLabel}"
+                                                   ToolTip="压制绿通道的中间调，让橄榄、灌木、草地退色。代价：Gamma Ramp 做不出真正的选区，中性灰与混凝土会偏品红，褐色木料等暖色反而会更艳。建议不超过 40。"/>
+                                        <TextBlock x:Name="ArmbandDesaturateValue" Text="0" Style="{StaticResource ParamValue}"/>
+                                    </Grid>
+                                    <Slider x:Name="ArmbandDesaturateSlider" Style="{StaticResource TacticalSlider}"
+                                            Minimum="0" Maximum="100" Value="0"
+                                            TickFrequency="1" IsSnapToTickEnabled="True"/>
+                                </StackPanel>
+
+                                <TextBlock Text="「其余颜色变黑白、只留红蓝」做不到：输出是三条互相独立的通道曲线，判断不了一个像素「是不是绿的」。上面两项是可达的最接近效果，代价见悬停提示。"
+                                           Style="{StaticResource PanelHint}" Margin="0,14,0,0"/>
                             </StackPanel>
                         </StackPanel>
                     </Border>

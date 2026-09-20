@@ -30,9 +30,39 @@ namespace TarkovAutoShadePlus
             }
 
             base.OnStartup(e);
+
+            // 崩溃时先把画面还原，再让日志留下现场：这个工具改的是显示器曲线，
+            // 进程死了画面却一直被滤镜盖着，是最难受的失败方式。
+            this.DispatcherUnhandledException += delegate(object sender,
+                System.Windows.Threading.DispatcherUnhandledExceptionEventArgs args)
+            {
+                Diagnostics.Error("崩溃", "UI 线程未处理异常", args.Exception);
+                TryRestoreScreen();
+            };
+            AppDomain.CurrentDomain.UnhandledException += delegate(object sender,
+                UnhandledExceptionEventArgs args)
+            {
+                Diagnostics.Error("崩溃", "进程未处理异常", args.ExceptionObject as Exception);
+                TryRestoreScreen();
+            };
+
             var mainWindow = new MainWindow();
             MainWindow = mainWindow;
             mainWindow.Show();
+            Diagnostics.Info("启动", "主窗口已显示");
+        }
+
+        private void TryRestoreScreen()
+        {
+            try
+            {
+                var window = MainWindow as MainWindow;
+                if (window != null) window.RestoreScreenAfterCrash();
+            }
+            catch (Exception error)
+            {
+                Diagnostics.Error("崩溃", "还原画面也失败了", error);
+            }
         }
 
         protected override void OnExit(ExitEventArgs e)

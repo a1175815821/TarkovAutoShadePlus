@@ -63,9 +63,17 @@ namespace TarkovAutoShadePlus
                 result.Recommendation = ToneCurve.Recommend(result, settings);
         }
 
+        // 只对「文件还在写」这一类瞬时失败重试：长度还在变就继续等。
+        // 长度连续多次不变却仍然解不出图像，说明文件坏了或压根不是图片，
+        // 再等满 5 秒也只是把「分析失败」推后 5 秒。
+        private const int StableDecodeRetries = 6;
+        private const int DecodeRetryDelayMilliseconds = 180;
+
         public static Bitmap LoadStableBitmap(string filePath)
         {
             Exception lastError = null;
+            long previousLength = -1;
+            int stableFailures = 0;
             for (int attempt = 0; attempt < 28; attempt++)
             {
                 try
@@ -77,10 +85,39 @@ namespace TarkovAutoShadePlus
                         return new Bitmap(image);
                     }
                 }
+                catch (FileNotFoundException ex)
+                {
+                    throw new IOException("截图文件已被移动或删除。", ex);
+                }
+                catch (DirectoryNotFoundException ex)
+                {
+                    throw new IOException("截图目录已不存在。", ex);
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    throw new IOException("没有权限读取截图文件。", ex);
+                }
                 catch (Exception ex)
                 {
                     lastError = ex;
-                    Thread.Sleep(180);
+                    long length;
+                    try { length = new FileInfo(filePath).Length; }
+                    catch (Exception lost)
+                    {
+                        throw new IOException("截图文件已不可读。", lost);
+                    }
+                    if (length == previousLength)
+                    {
+                        stableFailures++;
+                        if (stableFailures >= StableDecodeRetries)
+                            throw new IOException("截图文件无法解码，可能已损坏。", lastError);
+                    }
+                    else
+                    {
+                        stableFailures = 0;
+                        previousLength = length;
+                    }
+                    Thread.Sleep(DecodeRetryDelayMilliseconds);
                 }
             }
             throw new IOException("截图尚未写入完成。", lastError);

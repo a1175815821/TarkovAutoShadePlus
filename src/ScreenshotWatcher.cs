@@ -121,7 +121,21 @@ namespace TarkovAutoShadePlus
                         watcher.EnableRaisingEvents = enabled;
                         watchers.Add(watcher);
                     }
-                    catch { }
+                    catch (Exception error)
+                    {
+                        Diagnostics.Error("监听", "无法监听目录：" + folder, error);
+                    }
+                }
+
+                if (folders.Count == 0)
+                {
+                    // 目录不存在时上面会静默跳过，用户只会觉得「监听了但没反应」。
+                    Diagnostics.Warn("监听", "没有任何可监听的截图目录（不存在的目录已跳过）");
+                }
+                else
+                {
+                    Diagnostics.Info("监听", "已挂载 " + folders.Count + " 个截图目录，" +
+                        (enabled ? "监听开启" : "监听暂停"));
                 }
             }
         }
@@ -174,6 +188,8 @@ namespace TarkovAutoShadePlus
             Action<string> handler = WatcherFaulted;
             if (handler == null) return;
             Exception error = e.GetException();
+            Diagnostics.Warn("监听", "文件系统监听出错：" +
+                (error == null ? "未知监听错误" : error.Message));
             handler(error == null ? "未知监听错误" : error.Message);
         }
 

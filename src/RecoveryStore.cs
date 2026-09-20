@@ -40,33 +40,42 @@ namespace TarkovAutoShadePlus
             }
             if (validRamps.Count == 0) return;
 
-            Directory.CreateDirectory(Folder);
-            string temporary = FilePath + ".tmp";
-            using (var stream = File.Create(temporary))
-            using (var writer = new BinaryWriter(stream, Encoding.UTF8))
+            // 这份文件只是「进程被强杀后能把画面还原」的保险，写不进去不该让
+            // 应用滤镜这条路径整个崩掉（调用方是没有 try 的）。
+            try
             {
-                writer.Write(Magic);
-                writer.Write(validRamps.Count);
-                foreach (KeyValuePair<string, GammaRamp> item in validRamps)
+                Directory.CreateDirectory(Folder);
+                string temporary = FilePath + ".tmp";
+                using (var stream = File.Create(temporary))
+                using (var writer = new BinaryWriter(stream, Encoding.UTF8))
                 {
-                    writer.Write(item.Key);
-                    WriteChannel(writer, item.Value.Red);
-                    WriteChannel(writer, item.Value.Green);
-                    WriteChannel(writer, item.Value.Blue);
+                    writer.Write(Magic);
+                    writer.Write(validRamps.Count);
+                    foreach (KeyValuePair<string, GammaRamp> item in validRamps)
+                    {
+                        writer.Write(item.Key);
+                        WriteChannel(writer, item.Value.Red);
+                        WriteChannel(writer, item.Value.Green);
+                        WriteChannel(writer, item.Value.Blue);
+                    }
                 }
-            }
-            if (File.Exists(FilePath))
-            {
-                try { File.Replace(temporary, FilePath, null); }
-                catch
+                if (File.Exists(FilePath))
                 {
-                    File.Delete(FilePath);
+                    try { File.Replace(temporary, FilePath, null); }
+                    catch
+                    {
+                        File.Delete(FilePath);
+                        File.Move(temporary, FilePath);
+                    }
+                }
+                else
+                {
                     File.Move(temporary, FilePath);
                 }
             }
-            else
+            catch (Exception error)
             {
-                File.Move(temporary, FilePath);
+                Diagnostics.Error("恢复记录", "写入失败，异常退出后可能无法自动还原画面", error);
             }
         }
 

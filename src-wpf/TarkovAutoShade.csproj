@@ -17,13 +17,13 @@
     <PlatformTarget>AnyCPU</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
     <LangVersion>latest</LangVersion>
-    <Version>2.0.0</Version>
+    <Version>2.2.0</Version>
     <Authors>lub大萝卜 · 二改 a1175815821</Authors>
     <Company>TarkovAutoShadePlus</Company>
     <Product>TarkovAutoShadePlus</Product>
     <Copyright>Copyright © 2026 · 原作者 lub大萝卜 · 二改 a1175815821 · 免费分享，禁止倒卖</Copyright>
-    <AssemblyVersion>2.0.0.0</AssemblyVersion>
-    <FileVersion>2.0.0.0</FileVersion>
+    <AssemblyVersion>2.2.0.0</AssemblyVersion>
+    <FileVersion>2.2.0.0</FileVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
@@ -94,6 +94,9 @@
     </Compile>
     <Compile Include="../src/RealtimeController.cs">
       <Link>Core/RealtimeController.cs</Link>
+    </Compile>
+    <Compile Include="../src/Diagnostics.cs">
+      <Link>Core/Diagnostics.cs</Link>
     </Compile>
     <Compile Include="../src/DdcCiController.cs">
       <Link>Core/DdcCiController.cs</Link>

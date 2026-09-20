@@ -38,6 +38,7 @@ namespace TarkovAutoShadePlus
         private GlobalHotkey toggleHotkey;
         private WinForms.NotifyIcon trayIcon;
         private WinForms.ContextMenuStrip trayMenu;
+        private WinForms.ToolStripItem trayToggleMenuItem;
         private AnalysisResult currentAnalysis;
         private string lastAnalyzedPath;
         private string displayDevice;
@@ -78,11 +79,20 @@ namespace TarkovAutoShadePlus
         private RealtimeController realtimeController;
         private bool updatingRealtimeControls;
         private int realtimeVersion;
+        private int reminderCount;
+        private bool hasError;
 
         public MainWindow()
         {
             settings.Normalize();
+            // 平铺字段只是「上次生效的那份档案」的镜像，而 activeProfileKey 是内存态。
+            // 不先按 LockedProfileKey 把它恢复到同一档，界面会拿着竞技场的数值标成
+            // 「原版」，随后任何一次落盘都会把这套数值写进原版档案里。
+            activeProfileKey = MathUtil.Clamp(settings.LockedProfileKey,
+                AppSettings.ProfileKeyEft, AppSettings.ProfileKeyArena);
+            settings.GetProfile(activeProfileKey).ApplyTo(settings);
             InitializeComponent();
+            RestoreWindowGeometry();
             gammaController.TransitionFailed += OnGammaTransitionFailed;
             InitializePreviewControl();
             InitializeTrayIcon();
@@ -92,10 +102,13 @@ namespace TarkovAutoShadePlus
             BindButtonEvents();
             BindPresetEvents();
             BindProfileEvents();
+            BindFocusEvents();
             BindDisplayEvents();
             BindProcessWatchEvents();
             BindFolderPicker();
             AboutButton.Click += delegate { ShowAboutWindow(); };
+            DiagnosticsButton.Click += delegate { ShowDiagnosticsWindow(); };
+            FaultPill.MouseLeftButtonUp += delegate { OpenDiagnosticsFromPill(); };
             InitializeDisplay();
             ApplySettingsToSliders();
             InitializeProcessWatcher();
@@ -114,8 +127,15 @@ namespace TarkovAutoShadePlus
                 initializing = false;
                 UpdateWatcherUi();
                 UpdateProcessWatchUi();
+                // GlobalHotkey 在同一个 Loaded 上更早注册，此时结果已经确定。
+                ReportHotkeyRegistration();
+                ReportSettingsLoadResult();
             };
             Closed += OnClosed;
+            // 几何随时记在内存里：OnClosed 里 RestoreBounds 可能已经拿不到有效值
+            // （窗口正在拆），只在退出时取一次会存成空。这里只赋 5 个整数，不写盘。
+            LocationChanged += delegate { CaptureWindowGeometry(); };
+            SizeChanged += delegate { CaptureWindowGeometry(); };
 
             RefreshSliderLabels();
             UpdateMetrics();
@@ -138,6 +158,7 @@ namespace TarkovAutoShadePlus
             }
 
             updatingDisplayList = true;
+            bool targetOffline = false;
             try
             {
                 var refreshedDisplays = GammaRampController.EnumerateDisplays();
@@ -145,13 +166,18 @@ namespace TarkovAutoShadePlus
                 displayTargets.AddRange(refreshedDisplays);
 
                 DisplayTarget selected = null;
+                DisplayTarget remembered = null;
                 foreach (DisplayTarget display in displayTargets)
                 {
                     if (selected == null && display.Primary) selected = display;
                     if (string.Equals(display.DeviceName, displayDevice,
                         StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(display.DeviceName, settings.DisplayDevice,
-                        StringComparison.OrdinalIgnoreCase)) selected = display;
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        selected = display;
+                        remembered = display;
+                    }
                 }
                 if (selected == null && displayTargets.Count > 0)
                     selected = displayTargets[0];
@@ -160,7 +186,6 @@ namespace TarkovAutoShadePlus
                 if (selected == null)
                 {
                     displayDevice = "";
-                    settings.DisplayDevice = "";
                     DisplayComboBox.Items.Add("未检测到显示器");
                     DisplayComboBox.SelectedIndex = 0;
                 }
@@ -169,23 +194,35 @@ namespace TarkovAutoShadePlus
                     foreach (DisplayTarget display in displayTargets)
                         DisplayComboBox.Items.Add(display);
                     displayDevice = selected.DeviceName;
-                    settings.DisplayDevice = displayDevice;
+                    if (remembered != null)
+                        settings.DisplayDevice = remembered.DeviceName;
+                    else
+                    {
+                        // 用户指定的显示器这次没在线（睡着、拔掉、换过分辨率）。
+                        // 临时落到可用的一台上，但不能把他的选择写掉 —— 否则
+                        // 一次掉线就永久改掉目标显示器。
+                        targetOffline = !string.IsNullOrWhiteSpace(settings.DisplayDevice);
+                    }
                     DisplayComboBox.SelectedItem = selected;
                 }
 
-                var availableDevices = new HashSet<string>(
-                    StringComparer.OrdinalIgnoreCase);
-                foreach (DisplayTarget display in displayTargets)
-                    availableDevices.Add(display.DeviceName);
+                // 这里只整理「记录」，不按在线设备剪枝：剪完再落盘，显示器睡一觉
+                // 回来用户的多屏勾选就没了。在线过滤放在取用目标的时候做。
                 var selectedDevices = new List<string>();
                 if (settings.SelectedDisplayDevices != null)
                 {
                     foreach (string device in settings.SelectedDisplayDevices)
-                    {
-                        if (availableDevices.Contains(device) &&
-                            !selectedDevices.Contains(device))
-                            selectedDevices.Add(device);
-                    }
+                        AddUnique(selectedDevices, device);
+                }
+                if (showNotification)
+                {
+                    // 「刷新显示器」是用户主动表态「我的显示器变了」，只有这时才按
+                    // 在线集合清理记录，否则彻底拔掉一台后就再没有地方能取消它。
+                    var onlineNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (DisplayTarget display in displayTargets)
+                        onlineNames.Add(display.DeviceName);
+                    selectedDevices.RemoveAll(
+                        device => !onlineNames.Contains(device));
                 }
                 if (selectedDevices.Count == 0 && selected != null)
                     selectedDevices.Add(selected.DeviceName);
@@ -210,10 +247,24 @@ namespace TarkovAutoShadePlus
                 ApplyRecommendation(currentAnalysis);
             else
                 UpdateModeUi();
-            if (showNotification)
+            if (targetOffline && !string.IsNullOrWhiteSpace(displayDevice))
+                ShowNotification("上次设定的目标显示器本次未在线，已临时改用 " +
+                    FriendlyDisplayLabel(displayDevice) + "；原设置仍然保留。",
+                    NotificationType.Warning);
+            else if (showNotification)
                 ShowNotification("显示器列表已更新", NotificationType.Info);
             SaveSettings();
             if (realtimeController != null) realtimeController.Wake();
+        }
+
+        private string FriendlyDisplayLabel(string deviceName)
+        {
+            foreach (DisplayTarget display in displayTargets)
+            {
+                if (string.Equals(display.DeviceName, deviceName,
+                    StringComparison.OrdinalIgnoreCase)) return display.ToString();
+            }
+            return deviceName.Replace(@"\\.\", "");
         }
 
         private void BuildDisplaySelectionControls()
@@ -265,18 +316,44 @@ namespace TarkovAutoShadePlus
 
         private void SyncSelectedDisplaysFromUi()
         {
-            var selected = new List<string>();
+            // 界面上只列得出「当前在线」的显示器。这里必须原样保留这次没出现的
+            // 勾选项，否则每次 BuildDisplaySelectionControls 都会顺手把掉线的
+            // 显示器从记录里剪掉，用户的多屏勾选睡一觉就没了。
+            var decided = new List<string>();
+            var listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (DisplaySelectionPanel != null)
             {
                 foreach (UIElement element in DisplaySelectionPanel.Children)
                 {
                     var checkBox = element as CheckBox;
                     string device = checkBox == null ? null : checkBox.Tag as string;
-                    if (checkBox != null && checkBox.IsChecked == true &&
-                        !string.IsNullOrWhiteSpace(device)) selected.Add(device);
+                    if (checkBox == null || string.IsNullOrWhiteSpace(device)) continue;
+                    if (listed.Contains(device)) continue;
+                    listed.Add(device);
+                    if (checkBox.IsChecked == true) decided.Add(device);
                 }
             }
-            settings.SelectedDisplayDevices = selected;
+            var merged = new List<string>();
+            if (settings.SelectedDisplayDevices != null)
+            {
+                foreach (string device in settings.SelectedDisplayDevices)
+                {
+                    // 在线的由勾选框说了算；这次没出现的原样保留。
+                    if (!listed.Contains(device)) AddUnique(merged, device);
+                }
+            }
+            foreach (string device in decided) AddUnique(merged, device);
+            settings.SelectedDisplayDevices = merged;
+        }
+
+        private static void AddUnique(List<string> list, string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            foreach (string existing in list)
+            {
+                if (string.Equals(existing, value, StringComparison.OrdinalIgnoreCase)) return;
+            }
+            list.Add(value);
         }
 
         private List<string> GetTargetDisplayDevices()
@@ -288,7 +365,48 @@ namespace TarkovAutoShadePlus
                 return single;
             }
             SyncSelectedDisplaysFromUi();
-            return new List<string>(settings.SelectedDisplayDevices);
+            var wanted = new List<string>(settings.SelectedDisplayDevices);
+            // 勾选里可以留着这次没在线的显示器（记录要留住），但生效目标只能是
+            // 真在线的那些，否则一整条应用链会因为一台读不到而整体失败。
+            if (displayTargets.Count == 0) return wanted;
+            var online = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (DisplayTarget display in displayTargets)
+                online.Add(display.DeviceName);
+            var result = new List<string>();
+            foreach (string device in wanted)
+            {
+                if (online.Contains(device)) result.Add(device);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 实时线程专用的目标显示器：只读 settings 里的纯数据，绝不碰 WPF 控件。
+        /// GetTargetDisplayDevices 在多屏模式下会去遍历勾选框，那在后台线程上
+        /// 必定抛 InvalidOperationException，而实时循环会把异常整个吞掉 —— 结果
+        /// 就是界面上写着「采样中」，实际一帧都没调。
+        /// SelectedDisplayDevices 每次变更都是整体换成新 List（不就地改），
+        /// 所以这里读到的引用始终是完整的。
+        /// </summary>
+        private List<string> GetRealtimeTargetDisplayDevices()
+        {
+            var result = new List<string>();
+            if (settings.MultiDisplayMode)
+            {
+                var devices = settings.SelectedDisplayDevices;
+                if (devices != null)
+                {
+                    foreach (string device in devices)
+                    {
+                        if (!string.IsNullOrWhiteSpace(device)) result.Add(device);
+                    }
+                }
+                return result;
+            }
+            string single = displayDevice;
+            if (string.IsNullOrWhiteSpace(single)) single = settings.DisplayDevice;
+            if (!string.IsNullOrWhiteSpace(single)) result.Add(single);
+            return result;
         }
 
         private void ApplyDisplayModeUi()
@@ -348,11 +466,17 @@ namespace TarkovAutoShadePlus
                 !candidates.Contains(settings.ScreenshotFolder, StringComparer.OrdinalIgnoreCase))
                 candidates.Insert(0, settings.ScreenshotFolder);
 
-            // 自动补上已安装但尚未记录的原版/竞技场目录，做到双端同时监听。
-            foreach (string discovered in ScreenshotFolderLocator.FindAll())
+            // 自动发现只在「用户从没自己整理过目录列表」时跑一次。以前每次启动
+            // 都把发现的目录补回列表，于是界面取消勾选的目录下次开机又回来。
+            // 要重新扫描，用「重新发现」按钮。
+            if (!settings.ScreenshotFoldersConfigured)
             {
-                if (!candidates.Contains(discovered, StringComparer.OrdinalIgnoreCase))
-                    candidates.Add(discovered);
+                foreach (string discovered in ScreenshotFolderLocator.FindAll())
+                {
+                    if (!candidates.Contains(discovered, StringComparer.OrdinalIgnoreCase))
+                        candidates.Add(discovered);
+                }
+                settings.ScreenshotFoldersConfigured = true;
             }
             settings.ScreenshotFolders = candidates;
             if (candidates.Count > 0)
@@ -570,9 +694,9 @@ namespace TarkovAutoShadePlus
 
             trayMenu = new WinForms.ContextMenuStrip();
             trayMenu.Items.Add("显示主窗口", null, delegate { ShowFromTray(); });
-            trayMenu.Items.Add("开启 / 关闭滤镜 (" +
-                FormatHotkey(settings.HotkeyKeyCode, settings.HotkeyModifiers) + ")",
-                null, delegate { ToggleFilter(); });
+            // 文字里的快捷键由 UpdateHotkeyUi 统一刷新，改键后这里不能停在旧按键上。
+            trayToggleMenuItem = trayMenu.Items.Add("开启 / 关闭滤镜", null,
+                delegate { ToggleFilter(); });
             trayMenu.Items.Add(new WinForms.ToolStripSeparator());
             trayMenu.Items.Add("退出程序", null, delegate { RequestExitFromTray(); });
 
@@ -636,7 +760,40 @@ namespace TarkovAutoShadePlus
         {
             string hotkey = FormatHotkey(settings.HotkeyKeyCode, settings.HotkeyModifiers);
             HotkeyText.Text = hotkey;
+            // 窗口加载完成之前 GlobalHotkey 还没机会去注册，那时的「未注册」不是失败。
+            bool failed = IsLoaded && toggleHotkey != null && !toggleHotkey.IsRegistered;
+            HotkeyText.Foreground = (System.Windows.Media.Brush)FindResource(
+                failed ? "HazardRedBrush" : "AmberAlertBrush");
             ToggleButton.Content = (IsFilterRunning() ? "关闭滤镜  " : "开启滤镜  ") + hotkey;
+            if (trayToggleMenuItem != null)
+                trayToggleMenuItem.Text = "开启 / 关闭滤镜 (" + hotkey + ")";
+        }
+
+        private void ReportHotkeyRegistration()
+        {
+            UpdateHotkeyUi();
+            if (toggleHotkey == null) return;
+            string hotkey = FormatHotkey(settings.HotkeyKeyCode, settings.HotkeyModifiers);
+            if (toggleHotkey.IsRegistered)
+            {
+                Diagnostics.Info("热键", "已注册 " + hotkey);
+                return;
+            }
+            // 裸功能键很容易撞上 IDE / 录屏软件。注册失败原先只能靠用户自己发现
+            // 「按了没反应」，这里把它说出来，并把标签染红。
+            Diagnostics.Warn("热键", "注册失败：" + hotkey + "（可能已被其他程序占用）");
+            ShowNotification("快捷键 " + hotkey +
+                " 注册失败，可能已被其他程序占用；点「设置」换一个。",
+                NotificationType.Warning);
+        }
+
+        private void ReportSettingsLoadResult()
+        {
+            if (string.IsNullOrEmpty(SettingsStore.LastLoadError)) return;
+            // 读档失败会被默认值顶掉，用户看到的就是「设置没了」，必须说清楚。
+            ShowNotification("上次的配置文件读取失败（" + SettingsStore.LastLoadError +
+                "），本次已改用默认配置；原文件已备份，详见「诊断」。",
+                NotificationType.Error);
         }
 
         private void ShowHotkeyCapture()
@@ -841,14 +998,27 @@ namespace TarkovAutoShadePlus
             BindSlider(ContrastSlider, ContrastValue, true);
             BindSlider(WarmthSlider, WarmthValue, true);
             BindSlider(SaturationSlider, SaturationValue, true);
+            BindSlider(FocusHueSlider, FocusHueValue, false, "°",
+                UpdateFocusHueSwatch);
+            BindSlider(FocusStrengthSlider, FocusStrengthValue, false);
+            BindSlider(FocusRangeSlider, FocusRangeValue, true);
+            BindSlider(TrimRedSlider, TrimRedValue, true);
+            BindSlider(TrimGreenSlider, TrimGreenValue, true);
+            BindSlider(TrimBlueSlider, TrimBlueValue, true);
+            BindSlider(ArmbandLiftSlider, ArmbandLiftValue, false);
+            BindSlider(ArmbandDesaturateSlider, ArmbandDesaturateValue, false);
         }
 
-        private void BindSlider(Slider slider, TextBlock value, bool signed)
+        private void BindSlider(Slider slider, TextBlock value, bool signed,
+            string suffix = "", Action<double> onValueChanged = null)
         {
             slider.ValueChanged += delegate(object sender, RoutedPropertyChangedEventArgs<double> e)
             {
                 int number = (int)Math.Round(e.NewValue);
-                value.Text = signed ? FormatSigned(number) : number.ToString();
+                value.Text = (signed ? FormatSigned(number) : number.ToString()) + suffix;
+                // 色卡这类纯展示元素必须在 initializing 之前刷新，
+                // 否则铺值阶段（ApplySettingsToSliders）色卡会停在旧颜色上。
+                if (onValueChanged != null) onValueChanged(e.NewValue);
                 // switchingProfile：切档时是程序在铺值，不是用户在调，
                 // 不能把刚加载的档案又顶成“自定义预设”。
                 if (initializing || switchingProfile) return;
@@ -884,6 +1054,151 @@ namespace TarkovAutoShadePlus
 
             MonitorBrightnessSlider.ValueChanged += OnMonitorSliderChanged;
             MonitorContrastSlider.ValueChanged += OnMonitorSliderChanged;
+        }
+
+        // 点一下快捷色相时，若用户还没开过聚焦，就顺手给一个能看出效果、
+        // 又不至于压过画面的强度。0 强度下点色相什么都看不到，很容易被当成没生效。
+        private const int DefaultFocusStrengthOnPick = 35;
+
+        private void BindFocusEvents()
+        {
+            BindFocusHuePreset(FocusHueEmberButton, 25, "火光橙");
+            BindFocusHuePreset(FocusHueBloodButton, 0, "血迹红");
+            BindFocusHuePreset(FocusHueFoliageButton, 110, "植被绿");
+            BindFocusHuePreset(FocusHueCyanButton, 195, "霓虹青");
+
+            FocusEnabledCheckBox.Checked += delegate
+            {
+                if (initializing || switchingProfile) return;
+                settings.FocusEnabled = true;
+                UpdateFocusEnabledUi();
+                CommitColorChange("已启用色彩聚焦");
+            };
+            FocusEnabledCheckBox.Unchecked += delegate
+            {
+                if (initializing || switchingProfile) return;
+                settings.FocusEnabled = false;
+                UpdateFocusEnabledUi();
+                CommitColorChange("已停用色彩聚焦（参数保留）");
+            };
+
+            ArmbandEnabledCheckBox.Checked += delegate
+            {
+                if (initializing || switchingProfile) return;
+                settings.ArmbandEnabled = true;
+                UpdateArmbandEnabledUi();
+                CommitColorChange("已启用臂环增强");
+            };
+            ArmbandEnabledCheckBox.Unchecked += delegate
+            {
+                if (initializing || switchingProfile) return;
+                settings.ArmbandEnabled = false;
+                UpdateArmbandEnabledUi();
+                CommitColorChange("已停用臂环增强（参数保留）");
+            };
+        }
+
+        /// <summary>
+        /// 面板内改动统一收尾：切到自定义预设、落盘、重算推荐值。
+        /// 关掉总开关时下面控件置灰，让「数值还在但不生效」这件事一眼可见。
+        /// </summary>
+        private void CommitColorChange(string message)
+        {
+            if (PresetComboBox.SelectedIndex != 5)
+            {
+                promotingCustomPreset = true;
+                PresetComboBox.SelectedIndex = 5;
+                promotingCustomPreset = false;
+            }
+            SyncSettingsFromSliders();
+            SaveSettings();
+            UpdateCurrentRecommendation();
+            if (!string.IsNullOrEmpty(message))
+                ShowNotification(message, NotificationType.Success);
+        }
+
+        private void UpdateFocusEnabledUi()
+        {
+            if (FocusControlsPanel == null) return;
+            FocusControlsPanel.IsEnabled = FocusEnabledCheckBox.IsChecked == true;
+        }
+
+        private void UpdateArmbandEnabledUi()
+        {
+            if (ArmbandControlsPanel == null) return;
+            ArmbandControlsPanel.IsEnabled = ArmbandEnabledCheckBox.IsChecked == true;
+        }
+
+        private void BindFocusHuePreset(Button button, int hue, string label)
+        {
+            if (button == null) return;
+            button.Click += delegate
+            {
+                bool startedFromOff = FocusStrengthSlider.Value < 1.0;
+                try
+                {
+                    // 和 ApplySettingsToSliders 一样：铺值期间不能触发
+                    // 「跳自定义预设 / 重算推荐值」，这里手动补一次。
+                    initializing = true;
+                    FocusHueSlider.Value = hue;
+                    if (startedFromOff)
+                        FocusStrengthSlider.Value = DefaultFocusStrengthOnPick;
+                }
+                finally
+                {
+                    initializing = false;
+                }
+                RefreshFocusHueVisual();
+                CommitColorChange(startedFromOff
+                    ? "目标色调：" + label + "，聚焦强度已设为 " + DefaultFocusStrengthOnPick
+                    : "目标色调：" + label);
+            };
+        }
+
+        private void RefreshFocusHueVisual()
+        {
+            UpdateFocusHueSwatch(FocusHueSlider.Value);
+        }
+
+        private void UpdateFocusHueSwatch(double hue)
+        {
+            if (FocusHueSwatch == null) return;
+            try
+            {
+                // 色卡只表示目标色相本身，用满饱和的纯色，V 压到 0.8
+                // 免得在深色面板上过曝成白块。
+                double h = hue % 360.0;
+                if (h < 0.0) h += 360.0;
+                double sectorPosition = h / 60.0;
+                int sector = (int)Math.Floor(sectorPosition) % 6;
+                double fraction = sectorPosition - Math.Floor(sectorPosition);
+                const double value = 0.80;
+                double falling = value * (1.0 - fraction);
+                double rising = value * fraction;
+                double red;
+                double green;
+                double blue;
+                switch (sector)
+                {
+                    case 0: red = value; green = rising; blue = 0.0; break;
+                    case 1: red = falling; green = value; blue = 0.0; break;
+                    case 2: red = 0.0; green = value; blue = rising; break;
+                    case 3: red = 0.0; green = falling; blue = value; break;
+                    case 4: red = rising; green = 0.0; blue = value; break;
+                    default: red = value; green = 0.0; blue = falling; break;
+                }
+                FocusHueSwatch.Background = new SolidColorBrush(ToMediaColor(
+                    red, green, blue));
+            }
+            catch { }
+        }
+
+        private static Color ToMediaColor(double red, double green, double blue)
+        {
+            return Color.FromRgb(
+                (byte)Math.Round(MathUtil.Clamp(red, 0.0, 1.0) * 255.0),
+                (byte)Math.Round(MathUtil.Clamp(green, 0.0, 1.0) * 255.0),
+                (byte)Math.Round(MathUtil.Clamp(blue, 0.0, 1.0) * 255.0));
         }
 
         private void BindDisplayEvents()
@@ -1342,6 +1657,8 @@ namespace TarkovAutoShadePlus
             }
             // EMA 带着上一个游戏的旧场景会慢半拍，切档必须清掉。
             if (realtimeController != null) realtimeController.ResetSceneState();
+            Diagnostics.Info("档案", "切换到「" + AppSettings.GetProfileLabel(newKey) + "」" +
+                (settings.ProfileFollowGame ? "（跟随游戏）" : "（已锁定）"));
             UpdateCurrentRecommendation();
             UpdateProfileUi();
             SaveSettings();
@@ -1567,15 +1884,23 @@ namespace TarkovAutoShadePlus
                     {
                         if (closing || Dispatcher.HasShutdownStarted) return settings;
                         AppSettings snapshot = null;
-                        Dispatcher.Invoke(new Action(delegate
-                        {
-                            snapshot = CreateSettingsSnapshot();
-                        }));
+                        // 用 BeginInvoke + 带超时的 Wait，而不是 Dispatcher.Invoke 的
+                        // 超时重载：那个重载会和 Invoke(Delegate, TimeSpan,
+                        // DispatcherPriority, params object[]) 撞车，后三个参数被当成
+                        // 动作参数塞进 0 参数的 Action，运行时直接
+                        // TargetParameterCountException。
+                        // 带超时是因为 UI 线程此刻可能正阻塞在 Dispose 的 loop.Wait 里。
+                        DispatcherOperation operation = Dispatcher.BeginInvoke(
+                            DispatcherPriority.Background,
+                            new Action(delegate { snapshot = CreateSettingsSnapshot(); }));
+                        if (operation.Wait(TimeSpan.FromMilliseconds(500)) !=
+                            DispatcherOperationStatus.Completed) return settings;
                         return snapshot ?? settings;
                     }
                     catch { return settings; }
                 },
-                AcquireTargets = GetTargetDisplayDevices,
+                AcquireTargets = GetRealtimeTargetDisplayDevices,
+                IsRealtimeEnabled = delegate { return settings.RealtimeEnabled; },
                 IsGameForeground = delegate
                 {
                     if (!settings.ProcessWatchEnabled) return true;
@@ -1651,8 +1976,33 @@ namespace TarkovAutoShadePlus
 
         private void UpdateRealtimeStatus(string status)
         {
-            if (RealtimeStatusText == null) return;
-            RealtimeStatusText.Text = status ?? "";
+            status = status ?? "";
+            if (RealtimeStatusText != null) RealtimeStatusText.Text = status;
+            if (RealtimeStateText == null) return;
+            // 顶栏那条只放最短的形式，长状态（例如抓屏失败的整句话）留在面板里。
+            string shortStatus;
+            string brush;
+            switch (status)
+            {
+                case "稳定":
+                    shortStatus = "稳定"; brush = "TerminalGreenBrush"; break;
+                case "切换中":
+                    shortStatus = "跟随中"; brush = "AmberAlertBrush"; break;
+                case "场景确认中":
+                    shortStatus = "确认中"; brush = "AmberAlertBrush"; break;
+                case "未启用":
+                    shortStatus = "未启用"; brush = "PhosphorDimBrush"; break;
+                case "已手动关闭":
+                    shortStatus = "已暂停"; brush = "PhosphorDimBrush"; break;
+                case "等待游戏前台":
+                    shortStatus = "等前台"; brush = "PhosphorDimBrush"; break;
+                default:
+                    // 抓屏失败 / 没有可用的显示器之类
+                    shortStatus = "异常"; brush = "HazardRedBrush"; break;
+            }
+            RealtimeStateText.Text = shortStatus;
+            RealtimeStateText.Foreground = (System.Windows.Media.Brush)FindResource(brush);
+            RealtimeStateText.ToolTip = status;
         }
 
         private void RefreshMonitorCapabilities()
@@ -1881,6 +2231,18 @@ namespace TarkovAutoShadePlus
             ContrastSlider.Value = settings.CustomContrastBias;
             WarmthSlider.Value = settings.CustomWarmth;
             SaturationSlider.Value = settings.CustomSaturationBias;
+            FocusHueSlider.Value = settings.CustomFocusHue;
+            FocusStrengthSlider.Value = settings.CustomFocusStrength;
+            FocusRangeSlider.Value = settings.CustomFocusRange;
+            TrimRedSlider.Value = settings.CustomTrimRed;
+            TrimGreenSlider.Value = settings.CustomTrimGreen;
+            TrimBlueSlider.Value = settings.CustomTrimBlue;
+            FocusEnabledCheckBox.IsChecked = settings.CustomFocusEnabled;
+            ArmbandEnabledCheckBox.IsChecked = settings.CustomArmbandEnabled;
+            ArmbandLiftSlider.Value = settings.CustomArmbandLift;
+            ArmbandDesaturateSlider.Value = settings.CustomArmbandDesaturate;
+            UpdateFocusEnabledUi();
+            UpdateArmbandEnabledUi();
         }
 
         private static PresetValues GetBuiltInPreset(int index)
@@ -1930,12 +2292,24 @@ namespace TarkovAutoShadePlus
             // is the same neutral starting point as the automatic preset.
             PresetValues defaults = GetBuiltInPreset(
                 selectedIndex == 5 ? 0 : selectedIndex);
+            var factory = AppSettings.CreateDefault();
             try
             {
                 initializing = true;
                 ApplyPresetValues(defaults);
-                SmoothTransitionCheckBox.IsChecked =
-                    AppSettings.CreateDefault().SmoothTransition;
+                SmoothTransitionCheckBox.IsChecked = factory.SmoothTransition;
+                // 「恢复默认数值」覆盖界面上看得见的全部参数。原先只回 11 个基础
+                // 滑块，色彩聚焦和臂环还留着上次调过的偏色，按钮名不副实。
+                FocusHueSlider.Value = factory.FocusHue;
+                FocusStrengthSlider.Value = factory.FocusStrength;
+                FocusRangeSlider.Value = factory.FocusRange;
+                TrimRedSlider.Value = factory.TrimRed;
+                TrimGreenSlider.Value = factory.TrimGreen;
+                TrimBlueSlider.Value = factory.TrimBlue;
+                FocusEnabledCheckBox.IsChecked = factory.FocusEnabled;
+                ArmbandEnabledCheckBox.IsChecked = factory.ArmbandEnabled;
+                ArmbandLiftSlider.Value = factory.ArmbandLift;
+                ArmbandDesaturateSlider.Value = factory.ArmbandDesaturate;
             }
             finally
             {
@@ -2068,12 +2442,6 @@ namespace TarkovAutoShadePlus
         }
 
         private void CompleteAnalysis(
-            Task<AnalysisPackage> task, int version, bool applyWhenReady)
-        {
-            CompleteAnalysis(task, version, applyWhenReady, null, 1);
-        }
-
-        private void CompleteAnalysis(
             Task<AnalysisPackage> task, int version, bool applyWhenReady,
             string filePath, int retryAttempt)
         {
@@ -2102,6 +2470,7 @@ namespace TarkovAutoShadePlus
                     retryTimer.Start();
                     return;
                 }
+                Diagnostics.Warn("分析", "分析失败：" + filePath + " — " + message);
                 ShowNotification("分析失败：" + message,
                     NotificationType.Error);
                 return;
@@ -2235,14 +2604,18 @@ namespace TarkovAutoShadePlus
             List<string> targetDevices = GetTargetDisplayDevices();
             if (targetDevices.Count == 0)
             {
-                ShowNotification(settings.MultiDisplayMode ?
-                    "请至少勾选一个显示器" : "没有可用的显示器", NotificationType.Error);
+                bool checkedSomething = settings.SelectedDisplayDevices != null &&
+                    settings.SelectedDisplayDevices.Count > 0;
+                ShowNotification(!settings.MultiDisplayMode ? "没有可用的显示器" :
+                    checkedSomething ? "勾选的显示器本次都不在线，请在列表里重新勾选。" :
+                    "请至少勾选一个显示器", NotificationType.Error);
                 return;
             }
 
             string error;
             if (!gammaController.CaptureBaselines(targetDevices, out error))
             {
+                Diagnostics.Warn("滤镜", "读取显示器原始曲线失败：" + error);
                 ShowNotification("读取显示器原始曲线失败：" + error,
                     NotificationType.Error);
                 return;
@@ -2262,6 +2635,7 @@ namespace TarkovAutoShadePlus
             if (!gammaController.TransitionTo(targetDevices, recommendation,
                 duration, out error))
             {
+                Diagnostics.Warn("滤镜", "应用滤镜失败：" + error);
                 ShowNotification("应用滤镜失败：" + error,
                     NotificationType.Error);
                 return;
@@ -2269,6 +2643,13 @@ namespace TarkovAutoShadePlus
 
             ObsFilterStateStore.WriteActive(recommendation, duration);
             filterModeEnabled = true;
+            Diagnostics.Throttled("滤镜", "applied",
+                "已应用 " + recommendation.ProfileName + "（gamma " +
+                recommendation.EquivalentGamma.ToString("0.00") + "、亮度 +" +
+                Math.Round(recommendation.BrightnessBoost).ToString("0") + "、对比 +" +
+                Math.Round(recommendation.ContrastBoost).ToString("0") + "，过渡 " +
+                duration + "ms，目标 " + string.Join("/", targetDevices.ToArray()) + "）",
+                TimeSpan.FromSeconds(2));
             UpdateModeUi();
             if (!silent)
                 ShowNotification("已应用：" + recommendation.ProfileName,
@@ -2343,8 +2724,8 @@ namespace TarkovAutoShadePlus
                 (System.Windows.Media.Brush)FindResource("TerminalGreenBrush") :
                 (System.Windows.Media.Brush)FindResource("PhosphorDimBrush");
             if (trayIcon != null)
-                trayIcon.Text = "TarkovAutoShade - " +
-                    (running ? "FILTER ON" : "FILTER OFF");
+                trayIcon.Text = "TarkovAutoShadePlus - " +
+                    (running ? "滤镜已开启" : "滤镜已关闭");
         }
 
         private bool IsFilterRunning()
@@ -2383,6 +2764,20 @@ namespace TarkovAutoShadePlus
             BrowseFolderButton.Foreground = folderReady ?
                 (System.Windows.Media.Brush)FindResource("PhosphorWhiteBrush") :
                 (System.Windows.Media.Brush)FindResource("HazardRedBrush");
+            // 空状态里的徽标原先是写死的「监听中」，一个目录都没挂上时也在这么说。
+            string watcherState = active ? "监听中" : "未监听";
+            if (WatcherBadgeText != null)
+            {
+                WatcherBadgeText.Text = "状态：" + watcherState;
+                WatcherBadgeText.Foreground = (System.Windows.Media.Brush)FindResource(
+                    active ? "AmberAlertBrush" : "HazardRedBrush");
+            }
+            if (WatcherStateText != null)
+            {
+                WatcherStateText.Text = watcherState;
+                WatcherStateText.Foreground = (System.Windows.Media.Brush)FindResource(
+                    active ? "AmberAlertBrush" : "HazardRedBrush");
+            }
             UpdateModeUi();
         }
 
@@ -2434,6 +2829,19 @@ namespace TarkovAutoShadePlus
             ContrastSlider.Value = settings.ContrastBias;
             WarmthSlider.Value = settings.Warmth;
             SaturationSlider.Value = settings.SaturationBias;
+            FocusHueSlider.Value = settings.FocusHue;
+            FocusStrengthSlider.Value = settings.FocusStrength;
+            FocusRangeSlider.Value = settings.FocusRange;
+            TrimRedSlider.Value = settings.TrimRed;
+            TrimGreenSlider.Value = settings.TrimGreen;
+            TrimBlueSlider.Value = settings.TrimBlue;
+            FocusEnabledCheckBox.IsChecked = settings.FocusEnabled;
+            ArmbandEnabledCheckBox.IsChecked = settings.ArmbandEnabled;
+            ArmbandLiftSlider.Value = settings.ArmbandLift;
+            ArmbandDesaturateSlider.Value = settings.ArmbandDesaturate;
+            RefreshFocusHueVisual();
+            UpdateFocusEnabledUi();
+            UpdateArmbandEnabledUi();
             UpdateHotkeyUi();
             if (ProfileFollowGameCheckBox != null)
                 ProfileFollowGameCheckBox.IsChecked = settings.ProfileFollowGame;
@@ -2453,6 +2861,17 @@ namespace TarkovAutoShadePlus
             ContrastValue.Text = FormatSigned((int)ContrastSlider.Value);
             WarmthValue.Text = FormatSigned((int)WarmthSlider.Value);
             SaturationValue.Text = FormatSigned((int)SaturationSlider.Value);
+            FocusHueValue.Text = ((int)FocusHueSlider.Value).ToString() + "°";
+            FocusStrengthValue.Text = ((int)FocusStrengthSlider.Value).ToString();
+            FocusRangeValue.Text = FormatSigned((int)FocusRangeSlider.Value);
+            TrimRedValue.Text = FormatSigned((int)TrimRedSlider.Value);
+            TrimGreenValue.Text = FormatSigned((int)TrimGreenSlider.Value);
+            TrimBlueValue.Text = FormatSigned((int)TrimBlueSlider.Value);
+            ArmbandLiftValue.Text = ((int)ArmbandLiftSlider.Value).ToString();
+            ArmbandDesaturateValue.Text = ((int)ArmbandDesaturateSlider.Value).ToString();
+            RefreshFocusHueVisual();
+            UpdateFocusEnabledUi();
+            UpdateArmbandEnabledUi();
         }
 
         private void ApplySettingsToModel()
@@ -2468,6 +2887,16 @@ namespace TarkovAutoShadePlus
             settings.ContrastBias = (int)ContrastSlider.Value;
             settings.Warmth = (int)WarmthSlider.Value;
             settings.SaturationBias = (int)SaturationSlider.Value;
+            settings.FocusHue = (int)FocusHueSlider.Value;
+            settings.FocusStrength = (int)FocusStrengthSlider.Value;
+            settings.FocusRange = (int)FocusRangeSlider.Value;
+            settings.TrimRed = (int)TrimRedSlider.Value;
+            settings.TrimGreen = (int)TrimGreenSlider.Value;
+            settings.TrimBlue = (int)TrimBlueSlider.Value;
+            settings.FocusEnabled = FocusEnabledCheckBox.IsChecked == true;
+            settings.ArmbandEnabled = ArmbandEnabledCheckBox.IsChecked == true;
+            settings.ArmbandLift = (int)ArmbandLiftSlider.Value;
+            settings.ArmbandDesaturate = (int)ArmbandDesaturateSlider.Value;
             settings.SmoothTransition = SmoothTransitionCheckBox.IsChecked == true;
         }
 
@@ -2488,6 +2917,16 @@ namespace TarkovAutoShadePlus
                 settings.CustomSceneGuard = settings.SceneGuard;
                 settings.CustomBlackPoint = settings.BlackPoint;
                 settings.CustomSaturationBias = settings.SaturationBias;
+                settings.CustomFocusHue = settings.FocusHue;
+                settings.CustomFocusStrength = settings.FocusStrength;
+                settings.CustomFocusRange = settings.FocusRange;
+                settings.CustomTrimRed = settings.TrimRed;
+                settings.CustomTrimGreen = settings.TrimGreen;
+                settings.CustomTrimBlue = settings.TrimBlue;
+                settings.CustomFocusEnabled = settings.FocusEnabled;
+                settings.CustomArmbandEnabled = settings.ArmbandEnabled;
+                settings.CustomArmbandLift = settings.ArmbandLift;
+                settings.CustomArmbandDesaturate = settings.ArmbandDesaturate;
             }
             settings.PresetIndex = Math.Max(0, PresetComboBox.SelectedIndex);
         }
@@ -2502,6 +2941,18 @@ namespace TarkovAutoShadePlus
             // 否则切换之后这次的改动会丢。
             settings.GetProfile(activeProfileKey).CaptureFrom(settings);
             SettingsStore.Save(settings);
+            ReportSaveFailureOnce();
+        }
+
+        private bool saveErrorReported;
+
+        private void ReportSaveFailureOnce()
+        {
+            if (saveErrorReported || string.IsNullOrEmpty(SettingsStore.LastSaveError)) return;
+            saveErrorReported = true;
+            ShowNotification("配置写入失败，这次的改动重启后不会保留：" +
+                SettingsStore.LastSaveError + "。点右上角「诊断」看详情。",
+                NotificationType.Error);
         }
 
         private void SyncFoldersAndProcessesFromUi()
@@ -2531,6 +2982,16 @@ namespace TarkovAutoShadePlus
             snapshot.SceneGuard = settings.SceneGuard;
             snapshot.BlackPoint = settings.BlackPoint;
             snapshot.SaturationBias = settings.SaturationBias;
+            snapshot.FocusHue = settings.FocusHue;
+            snapshot.FocusStrength = settings.FocusStrength;
+            snapshot.FocusRange = settings.FocusRange;
+            snapshot.TrimRed = settings.TrimRed;
+            snapshot.TrimGreen = settings.TrimGreen;
+            snapshot.TrimBlue = settings.TrimBlue;
+            snapshot.FocusEnabled = settings.FocusEnabled;
+            snapshot.ArmbandEnabled = settings.ArmbandEnabled;
+            snapshot.ArmbandLift = settings.ArmbandLift;
+            snapshot.ArmbandDesaturate = settings.ArmbandDesaturate;
             snapshot.RealtimeEnabled = settings.RealtimeEnabled;
             snapshot.RealtimeIntervalMs = settings.RealtimeIntervalMs;
             snapshot.RealtimeSensitivity = settings.RealtimeSensitivity;
@@ -2542,14 +3003,42 @@ namespace TarkovAutoShadePlus
         {
             Dictionary<string, GammaRamp> ramps;
             if (!RecoveryStore.TryLoadAll(out ramps)) return;
+
+            // 已经拔掉 / 换掉的显示器不该算恢复失败：留着它，恢复就永远不会完成，
+            // 于是每次开机都弹一次「无法访问显示器」，记录也永久残留。
+            var connected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (DisplayTarget display in GammaRampController.EnumerateDisplays())
+                    connected.Add(display.DeviceName);
+            }
+            catch { }
+            if (connected.Count > 0)
+            {
+                var staleDevices = new List<string>();
+                foreach (string device in ramps.Keys)
+                {
+                    if (!connected.Contains(device)) staleDevices.Add(device);
+                }
+                foreach (string device in staleDevices) ramps.Remove(device);
+            }
+            if (ramps.Count == 0)
+            {
+                RecoveryStore.Clear();
+                return;
+            }
+
             string error;
             if (gammaController.ApplyDirect(ramps, out error))
             {
                 RecoveryStore.Clear();
+                Diagnostics.Info("恢复", "已还原 " + ramps.Count +
+                    " 台显示器的原始曲线（上次异常退出）");
                 ShowNotification("已恢复上次异常退出前的画面", NotificationType.Success);
             }
             else
             {
+                Diagnostics.Warn("恢复", "还原上次异常退出前的画面失败：" + error);
                 ShowNotification("异常退出恢复失败：" + error, NotificationType.Warning);
             }
         }
@@ -2572,17 +3061,186 @@ namespace TarkovAutoShadePlus
             ActionMessagePanel.BorderBrush = accent;
             ActionMessagePanel.Opacity = 1.0;
             ActionMessagePanel.IsHitTestVisible = true;
-            if (notificationTimer != null) notificationTimer.Stop();
-            notificationTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-            notificationTimer.Tick += delegate
+
+            // 这条消息只有 3 秒，之后就被下一条顶掉 —— 「应用滤镜失败」这种必须先看
+            // 见的东西因此等于没说。异常除了留久一点，还在顶栏留一个可点的计数。
+            bool fault = type == NotificationType.Error || type == NotificationType.Warning;
+            int seconds = fault ? 10 : 3;
+            if (fault)
             {
-                notificationTimer.Stop();
-                ActionMessageText.Text = string.Empty;
-                ActionMessageTypeText.Text = string.Empty;
-                ActionMessagePanel.Opacity = 0.0;
-                ActionMessagePanel.IsHitTestVisible = false;
-            };
+                if (type == NotificationType.Error) hasError = true;
+                reminderCount++;
+                FaultPillText.Text = reminderCount > 99 ? "提醒 99+" : "提醒 " + reminderCount;
+                // 只有真正的报错才是红色，「没找到截图」这种提示是琥珀色，
+                // 免的一律标红之后用户直接无视它。
+                string accentKey = hasError ? "HazardRedBrush" : "AmberAlertBrush";
+                Brush pillBrush = (Brush)FindResource(accentKey);
+                FaultPill.BorderBrush = pillBrush;
+                FaultPillDot.Fill = pillBrush;
+                FaultPillText.Foreground = pillBrush;
+                FaultPill.Visibility = Visibility.Visible;
+            }
+
+            if (notificationTimer == null)
+            {
+                notificationTimer = new DispatcherTimer();
+                notificationTimer.Tick += delegate
+                {
+                    notificationTimer.Stop();
+                    ActionMessageText.Text = string.Empty;
+                    ActionMessageTypeText.Text = string.Empty;
+                    ActionMessagePanel.Opacity = 0.0;
+                    ActionMessagePanel.IsHitTestVisible = false;
+                };
+            }
+            notificationTimer.Stop();
+            notificationTimer.Interval = TimeSpan.FromSeconds(seconds);
             notificationTimer.Start();
+        }
+
+        private void OpenDiagnosticsFromPill()
+        {
+            reminderCount = 0;
+            hasError = false;
+            FaultPill.Visibility = Visibility.Collapsed;
+            ShowDiagnosticsWindow();
+        }
+
+        private void ShowDiagnosticsWindow()
+        {
+            var targets = new List<string>();
+            foreach (string device in GetTargetDisplayDevices())
+                targets.Add(FriendlyDisplayLabel(device));
+
+            string report;
+            try
+            {
+                report = Diagnostics.BuildReport(settings, monitorCapabilities,
+                    targets.Count == 0 ? "无" : string.Join(" ｜ ", targets.ToArray()),
+                    IsFilterRunning());
+            }
+            catch (Exception error)
+            {
+                report = "生成诊断信息失败：" + error.Message;
+            }
+
+            var window = new Window
+            {
+                Title = "诊断信息",
+                Owner = this,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Width = 720,
+                Height = 560,
+                MinWidth = 520,
+                MinHeight = 360,
+                ShowInTaskbar = false,
+                Background = (Brush)FindResource("CrtSurfaceBrush"),
+                Foreground = (Brush)FindResource("PhosphorWhiteBrush")
+            };
+
+            var root = new Grid { Margin = new Thickness(18) };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var heading = new TextBlock
+            {
+                Text = "报障时把下面这份内容整段复制出来即可。路径里的用户名已隐去。",
+                FontFamily = (System.Windows.Media.FontFamily)FindResource("FontUi"),
+                FontSize = 11,
+                Foreground = (Brush)FindResource("PhosphorDimBrush"),
+                Margin = new Thickness(0, 0, 0, 10),
+                TextWrapping = TextWrapping.Wrap
+            };
+            Grid.SetRow(heading, 0);
+            root.Children.Add(heading);
+
+            var box = new TextBox
+            {
+                Text = report,
+                IsReadOnly = true,
+                AcceptsReturn = true,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                TextWrapping = TextWrapping.NoWrap,
+                FontFamily = (System.Windows.Media.FontFamily)FindResource("FontMono"),
+                FontSize = 11.5,
+                Background = (Brush)FindResource("InsetBrush"),
+                Foreground = (Brush)FindResource("PhosphorWhiteBrush"),
+                BorderBrush = (Brush)FindResource("BorderStrongBrush"),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(10)
+            };
+            box.SelectAll();
+            Grid.SetRow(box, 1);
+            root.Children.Add(box);
+
+            var buttons = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 12, 0, 0)
+            };
+            Grid.SetRow(buttons, 2);
+            var copy = new Button
+            {
+                Content = "复制全部",
+                Width = 92,
+                Height = 32,
+                Style = (Style)FindResource("TacticalButtonPrimary")
+            };
+            copy.Click += delegate
+            {
+                try
+                {
+                    Clipboard.SetText(report);
+                    ShowNotification("诊断信息已复制到剪贴板", NotificationType.Success);
+                }
+                catch (Exception error)
+                {
+                    Diagnostics.Error("诊断", "复制到剪贴板失败", error);
+                    ShowNotification("复制失败：" + error.Message, NotificationType.Warning);
+                }
+            };
+            var openFolder = new Button
+            {
+                Content = "打开日志目录",
+                Width = 110,
+                Height = 32,
+                Margin = new Thickness(10, 0, 0, 0),
+                Style = (Style)FindResource("TacticalButton")
+            };
+            openFolder.Click += delegate
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = Path.GetDirectoryName(Diagnostics.LogFilePath),
+                        UseShellExecute = true
+                    });
+                }
+                catch (Exception error)
+                {
+                    ShowNotification("打不开日志目录：" + error.Message, NotificationType.Warning);
+                }
+            };
+            var close = new Button
+            {
+                Content = "关闭",
+                Width = 72,
+                Height = 32,
+                Margin = new Thickness(10, 0, 0, 0),
+                Style = (Style)FindResource("TacticalButton")
+            };
+            close.Click += delegate { window.Close(); };
+            buttons.Children.Add(copy);
+            buttons.Children.Add(openFolder);
+            buttons.Children.Add(close);
+            root.Children.Add(buttons);
+
+            window.Content = root;
+            window.ShowDialog();
         }
 
         private void ShowAboutWindow()
@@ -2630,7 +3288,7 @@ namespace TarkovAutoShadePlus
 
             var details = new TextBlock
             {
-                Text = "版本：2.0.0\n原作者：lub大萝卜\n二改：a1175815821\n免费分享，禁止倒卖",
+                Text = "版本：2.2.0\n原作者：lub大萝卜\n二改：a1175815821\n免费分享，禁止倒卖",
                 FontFamily = (System.Windows.Media.FontFamily)FindResource("FontMono"),
                 FontSize = 12,
                 Foreground = (Brush)FindResource("PhosphorDimBrush"),
@@ -2744,6 +3402,63 @@ namespace TarkovAutoShadePlus
                 Warmth = warmth;
                 Saturation = saturation;
             }
+        }
+
+        private void RestoreWindowGeometry()
+        {
+            try
+            {
+                if (settings.WindowWidth.HasValue && settings.WindowHeight.HasValue)
+                {
+                    Width = Math.Max(MinWidth, settings.WindowWidth.Value);
+                    Height = Math.Max(MinHeight, settings.WindowHeight.Value);
+                }
+                // 显示器拔过、分辨率改过，存的坐标可能整窗口落在屏幕外，
+                // 那样窗口看不见也点不到。只在还能落到某个屏幕上时才恢复位置。
+                if (settings.WindowLeft.HasValue && settings.WindowTop.HasValue &&
+                    FallsOnSomeScreen(settings.WindowLeft.Value, settings.WindowTop.Value))
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual;
+                    Left = settings.WindowLeft.Value;
+                    Top = settings.WindowTop.Value;
+                }
+                if (settings.WindowMaximized) WindowState = WindowState.Maximized;
+            }
+            catch { }
+        }
+
+        private static bool FallsOnSomeScreen(double left, double top)
+        {
+            try
+            {
+                foreach (WinForms.Screen screen in WinForms.Screen.AllScreens)
+                {
+                    var bounds = screen.Bounds;
+                    // 留一条标题栏的余量：只剩一两个像素在屏内也没法拖动窗口。
+                    if (left >= bounds.Left - 200 && left <= bounds.Right - 60 &&
+                        top >= bounds.Top - 4 && top <= bounds.Bottom - 30) return true;
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private void CaptureWindowGeometry()
+        {
+            try
+            {
+                // RestoreBounds 拿的是「非最大化时」的边界，最大化时也能存回正常尺寸。
+                Rect normal = RestoreBounds;
+                if (normal.Width >= MinWidth && normal.Height >= MinHeight)
+                {
+                    settings.WindowWidth = (int)Math.Round(normal.Width);
+                    settings.WindowHeight = (int)Math.Round(normal.Height);
+                    settings.WindowLeft = (int)Math.Round(normal.Left);
+                    settings.WindowTop = (int)Math.Round(normal.Top);
+                }
+                settings.WindowMaximized = WindowState == WindowState.Maximized;
+            }
+            catch { }
         }
 
         protected override void OnClosing(CancelEventArgs e)
@@ -2908,6 +3623,7 @@ namespace TarkovAutoShadePlus
 
         private void OnClosed(object sender, EventArgs e)
         {
+            Diagnostics.Info("退出", "窗口关闭：还原画面、写回配置");
             closing = true;
             Interlocked.Increment(ref analysisVersion);
             Interlocked.Increment(ref previewVersion);
@@ -2935,6 +3651,7 @@ namespace TarkovAutoShadePlus
             try { SyncRealtimeSettingsFromUi(); }
             catch { }
             SyncFoldersAndProcessesFromUi();
+            CaptureWindowGeometry();
             // 平铺字段只是当前档案的镜像，落盘前必须写回对应档案，
             // 否则切换之后这次的改动会丢。
             settings.GetProfile(activeProfileKey).CaptureFrom(settings);
@@ -2951,6 +3668,17 @@ namespace TarkovAutoShadePlus
                 trayIcon = null;
             }
             if (trayMenu != null) trayMenu.Dispose();
+        }
+
+        /// <summary>
+        /// 崩溃兜底：进程要死了，先把显示器曲线还原再说。画面被滤镜盖着却找不到
+        /// 是谁干的，是这类工具最难受的失败方式。
+        /// </summary>
+        internal void RestoreScreenAfterCrash()
+        {
+            string ignored;
+            gammaController.RestoreAll(out ignored);
+            ObsFilterStateStore.WriteDisabled();
         }
 
         [DllImport("user32.dll")]

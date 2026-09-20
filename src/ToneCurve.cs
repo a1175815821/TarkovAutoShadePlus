@@ -151,6 +151,69 @@ namespace TarkovAutoShadePlus
             greenBalance = MathUtil.Clamp(greenBalance, -0.075, 0.075);
             blueBalance = MathUtil.Clamp(blueBalance, -0.075, 0.075);
 
+            // ---- 色彩聚焦 ----
+            // Gamma Ramp 只能按「通道 × 输入电平」改写，程序拿不到像素的邻居通道，
+            // 因此做不到真正的 HSV 选区（"只把橙色物体提亮"）。
+            // 这里做的是通道偏向式定向调色：把目标色相所在的通道在选定的亮度窗口
+            // 里推高，同时把其余通道压回 —— 观感上就是目标色系变浓、互补色变淡。
+            // 端点（纯黑 / 纯白）由窗口函数天然豁免，所以不会污染黑白场。
+            // 总开关关掉时保留滑块数值但完全不参与计算，
+            // 这样用户可以随时在「有 / 无」之间来回对比，不用把调好的参数清掉。
+            double focusRed = 0.0;
+            double focusGreen = 0.0;
+            double focusBlue = 0.0;
+            if (settings.FocusEnabled)
+            {
+                double focusStrength = settings.FocusStrength / 100.0;
+                if (focusStrength > 0.0)
+                {
+                    double hueRed;
+                    double hueGreen;
+                    double hueBlue;
+                    HueChannelWeights(settings.FocusHue,
+                        out hueRed, out hueGreen, out hueBlue);
+                    // 系数按「强度 100 时中间调约 ±30/255」定：改得动，但不至于
+                    // 把画面压成单色。默认最大调整强度 0.82 会再统一缩放一次。
+                    double lift = 0.085 * focusStrength;
+                    focusRed += lift * hueRed;
+                    focusGreen += lift * hueGreen;
+                    focusBlue += lift * hueBlue;
+                    double pushDown = 0.075 * focusStrength;
+                    focusRed -= pushDown * (1.0 - hueRed);
+                    focusGreen -= pushDown * (1.0 - hueGreen);
+                    focusBlue -= pushDown * (1.0 - hueBlue);
+                }
+
+                // 手动调色：分通道直接偏移，与目标色相独立，方便自己校色。
+                const double trimLift = 0.060 / AppSettings.TrimLimit;
+                focusRed += settings.TrimRed * trimLift;
+                focusGreen += settings.TrimGreen * trimLift;
+                focusBlue += settings.TrimBlue * trimLift;
+            }
+
+            double focusCenter = 0.5 + 0.30 * (
+                settings.FocusRange / (double)AppSettings.FocusRangeLimit);
+
+            // ---- 臂环增强（红 / 蓝双色）----
+            // 「双色强化」用 v² 作为权重：饱和的红蓝物体（v 高）被抬得最多，
+            // 中性灰所在的中间调权重只有 0.25，所以对灰白的污染比线性提升小。
+            // 「环境去色」压 G 通道的中间调，把橄榄 / 灌木 / 草地的绿分量拉掉。
+            // 注意这仍然是通道级操作：G 被压多少，中性灰就朝品红偏多少，
+            // 这个偏色在数学上无法和「选择性去色」分开，只能靠强度换取。
+            double armbandRed = 0.0;
+            double armbandBlue = 0.0;
+            double armbandGreen = 0.0;
+            if (settings.ArmbandEnabled)
+            {
+                double armbandLift = settings.ArmbandLift /
+                    (double)AppSettings.ArmbandLiftLimit;
+                double armbandDesaturate = settings.ArmbandDesaturate /
+                    (double)AppSettings.ArmbandDesaturateLimit;
+                armbandRed = 0.100 * armbandLift;
+                armbandBlue = 0.100 * armbandLift;
+                armbandGreen = -0.110 * armbandDesaturate;
+            }
+
             var recommendation = new FilterRecommendation {
                 ProfileName = GetProfileName(
                     result, effectiveDarkScore, brightScore,
@@ -167,10 +230,54 @@ namespace TarkovAutoShadePlus
                 Warmth = warmth,
                 RedBalance = redBalance,
                 GreenBalance = greenBalance,
-                BlueBalance = blueBalance
+                BlueBalance = blueBalance,
+                FocusRed = focusRed,
+                FocusGreen = focusGreen,
+                FocusBlue = focusBlue,
+                FocusCenter = focusCenter,
+                ArmbandRed = armbandRed,
+                ArmbandBlue = armbandBlue,
+                ArmbandGreen = armbandGreen
             };
             BuildLuts(recommendation);
             return recommendation;
+        }
+
+        // 目标色相 -> 归一化 RGB 权重。用标准 HSV 取 S=V=1 的纯色，
+        // 于是权重天然表达「这个色相里各通道占多少」：
+        // 暖橙 (25°) = (1.00, 0.42, 0.00)，青蓝 (195°) = (0.00, 0.51, 1.00)。
+        private static void HueChannelWeights(double hue,
+            out double red, out double green, out double blue)
+        {
+            double normalized = hue % 360.0;
+            if (normalized < 0.0) normalized += 360.0;
+            double sectorPosition = normalized / 60.0;
+            int sector = (int)Math.Floor(sectorPosition) % 6;
+            double fraction = sectorPosition - Math.Floor(sectorPosition);
+            double falling = 1.0 - fraction;
+            switch (sector)
+            {
+                case 0: red = 1.0; green = fraction; blue = 0.0; break;
+                case 1: red = falling; green = 1.0; blue = 0.0; break;
+                case 2: red = 0.0; green = 1.0; blue = fraction; break;
+                case 3: red = 0.0; green = falling; blue = 1.0; break;
+                case 4: red = fraction; green = 0.0; blue = 1.0; break;
+                default: red = 1.0; green = 0.0; blue = falling; break;
+            }
+        }
+
+        // 色彩聚焦的亮度窗口：单峰、峰值恒为 1、峰位可移，且 v=0 / v=1 处恒为 0。
+        // 峰位 0.5 时正好退化成既有的 4v(1-v)，所以「作用亮度」归零时，
+        // 手动通道微调与既有的暖色 / 通道平衡走同一条曲线形状。
+        // 两端强制为 0 很关键：否则作用亮度推到高光时会和 ToWord 的
+        // 端点夹取撞出 17/255 级别的白场台阶。
+        private static double FocusWindow(double value, double lowExponent,
+            double highExponent, double normalization)
+        {
+            if (normalization <= 0.0) return 0.0;
+            double low = Math.Pow(value, lowExponent);
+            double high = Math.Pow(1.0 - value, highExponent);
+            return low * high * normalization;
         }
 
         private static void BuildLuts(FilterRecommendation recommendation)
@@ -183,6 +290,13 @@ namespace TarkovAutoShadePlus
             double previousGreen = 0.0;
             double previousBlue = 0.0;
             double totalChange = 0.0;
+
+            // 聚焦窗口的指数与归一化系数只依赖峰位，循环外算一次即可。
+            double focusLowExponent = 2.0 * recommendation.FocusCenter;
+            double focusHighExponent = 2.0 - focusLowExponent;
+            double focusPeak = Math.Pow(recommendation.FocusCenter, focusLowExponent) *
+                Math.Pow(1.0 - recommendation.FocusCenter, focusHighExponent);
+            double focusNormalization = focusPeak > 1e-9 ? 1.0 / focusPeak : 0.0;
 
             for (int i = 0; i < 256; i++)
             {
@@ -220,6 +334,8 @@ namespace TarkovAutoShadePlus
                 value = MathUtil.Clamp(value, 0.0, 1.0);
                 value = MathUtil.Lerp(input, value, recommendation.StrengthBlend);
                 double colorShape = 4.0 * value * (1.0 - value);
+                double focusShape = FocusWindow(value, focusLowExponent,
+                    focusHighExponent, focusNormalization);
                 double appliedWarmth =
                     recommendation.Warmth * recommendation.StrengthBlend;
                 double appliedRedBalance =
@@ -228,14 +344,33 @@ namespace TarkovAutoShadePlus
                     recommendation.GreenBalance * recommendation.StrengthBlend;
                 double appliedBlueBalance =
                     recommendation.BlueBalance * recommendation.StrengthBlend;
+                double appliedFocusRed =
+                    recommendation.FocusRed * recommendation.StrengthBlend;
+                double appliedFocusGreen =
+                    recommendation.FocusGreen * recommendation.StrengthBlend;
+                double appliedFocusBlue =
+                    recommendation.FocusBlue * recommendation.StrengthBlend;
+                // 臂环的 R / B 提升只认饱和区：权重 v² 在中间调只有 0.25。
+                double armbandShape = value * value;
+                double appliedArmbandRed =
+                    recommendation.ArmbandRed * recommendation.StrengthBlend;
+                double appliedArmbandBlue =
+                    recommendation.ArmbandBlue * recommendation.StrengthBlend;
+                double appliedArmbandGreen =
+                    recommendation.ArmbandGreen * recommendation.StrengthBlend;
                 double red = MathUtil.Clamp(
                     value + (appliedWarmth + appliedRedBalance) *
-                    colorShape, 0.0, 1.0);
+                    colorShape + appliedFocusRed * focusShape +
+                    appliedArmbandRed * armbandShape, 0.0, 1.0);
                 double green = MathUtil.Clamp(
-                    value + appliedGreenBalance * colorShape, 0.0, 1.0);
+                    value + appliedGreenBalance * colorShape +
+                    appliedFocusGreen * focusShape +
+                    appliedArmbandGreen * colorShape, 0.0, 1.0);
                 double blue = MathUtil.Clamp(
                     value - appliedWarmth * colorShape +
-                    appliedBlueBalance * colorShape, 0.0, 1.0);
+                    appliedBlueBalance * colorShape +
+                    appliedFocusBlue * focusShape +
+                    appliedArmbandBlue * armbandShape, 0.0, 1.0);
 
                 // SetDeviceGammaRamp requires a monotonic ramp on many drivers.
                 red = Math.Max(previousRed, red);
